@@ -22,12 +22,31 @@ func NewExecutor() *Executor {
 }
 
 func (e *Executor) Execute(task scheduler.Task) error {
-	j, _ := json.Marshal(task.Payload)
-	req, err := http.NewRequest(http.MethodPost, task.URL, bytes.NewBuffer(j))
+	var bodyBytes []byte
+	switch v := task.Payload.(type) {
+	case string:
+		bodyBytes = []byte(v)
+	case []byte:
+		bodyBytes = v
+	default:
+		// fallback to JSON
+		bodyBytes, _ = json.Marshal(task.Payload)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, task.URL, bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+
+	// Set custom headers
+	for k, v := range task.Headers {
+		req.Header.Set(k, v)
+	}
+	// If no Content-Type header is set, default to application/json
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
 	_, err = e.client.Do(req)
 	return err
 }
