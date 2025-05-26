@@ -1,55 +1,111 @@
 # Schedy
 
-Lightweight HTTP-based task scheduler that lets you schedule and execute tasks at specified times.
+> **A self-hostable, ultra-lightweight HTTP task scheduler for the weird and wonderful automation you want.**
+
+Schedy lets you schedule HTTP POST requests to any endpoint at any time, with custom headers and payloads. Perfect for webhooks, bots, reminders, integrations, and all sorts of automation—without the bloat.
+
+---
 
 ## Features
 
-- Schedule tasks via HTTP API
-- Executes tasks at the right time using Go routines and timers
-- Simple and easy to integrate
+- 🕒 **Schedule HTTP tasks** for any time in the future
+- 🪶 **Ultra-lightweight**: single binary, no external dependencies except BadgerDB
+- 🏠 **Self-hostable**: run anywhere Go runs (Linux, macOS, Windows, ARM, x86)
+- 🔒 **Custom headers**: add auth, content-type, or anything else
+- 🧬 **Flexible payloads**: send JSON, form data, or plain text
+- 🦄 **Weirdly simple**: no UI, no cron, just HTTP
 
-## Getting Started
+---
 
-### Prerequisites
+## Quick Start
 
-- Go 1.18+ installed
+### 1. Download the Binary
 
-### Installation
+Head to [Releases](https://github.com/ksamirdev/schedy/releases) and grab the latest `schedy` binary for your OS/architecture. No build required!
 
-```bash
-git clone https://github.com/ksamirdev/schedy.git
-cd schedy
-go build -o schedy cmd/schedy/main.go
-```
-
-### Usage
-
-Start the scheduler server:
+### 2. Run
 
 ```bash
 ./schedy
 ```
 
-### API Endpoints
+Schedy will listen on `:8080` by default.
 
-- `POST /tasks` — Schedule a new task
+---
 
-### Example
+## API
 
-Schedule a task:
+### Schedule a Task
+
+Send a POST to `/tasks`:
 
 ```bash
-curl -X POST http://localhost:8080/tasks -d '{"execute_at":"2025-05-26T15:00:00Z","url":"https://webhook.site/8a741093-35cc-4085-9c0d-1e7f0c98ef9c", "payload": {"key": "value"}}' -H "Content-Type: application/json"
+curl -X POST http://localhost:8080/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "execute_at": "2025-05-26T15:00:00Z",
+    "url": "https://webhook.site/your-endpoint",
+    "headers": {"Content-Type": "application/x-www-form-urlencoded", "Authorization": "Bearer TOKEN"},
+    "payload": "foo=bar&baz=qux"
+  }'
 ```
+
+#### Request Fields
+- `execute_at`: When to run (RFC3339, UTC)
+- `url`: Where to POST
+- `headers`: (optional) Map of HTTP headers
+- `payload`: (optional) Anything: JSON, string, bytes, form data, etc.
+
+#### Examples
+
+**JSON payload (default):**
+```bash
+curl -X POST http://localhost:8080/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "execute_at": "2025-05-26T15:00:00Z",
+    "url": "https://example.com/webhook",
+    "payload": {"hello": "world"}
+  }'
+```
+
+**Form data:**
+```bash
+curl -X POST http://localhost:8080/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "execute_at": "2025-05-26T15:00:00Z",
+    "url": "https://example.com/form",
+    "headers": {"Content-Type": "application/x-www-form-urlencoded"},
+    "payload": "foo=bar&baz=qux"
+  }'
+```
+
+**Plain text:**
+```bash
+curl -X POST http://localhost:8080/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "execute_at": "2025-05-26T15:00:00Z",
+    "url": "https://example.com/text",
+    "headers": {"Content-Type": "text/plain"},
+    "payload": "hello world!"
+  }'
+```
+
+---
+
+## Why Schedy?
+- No cron, no YAML, no UI, no cloud lock-in
+- Just HTTP, just works
+- For hackers, tinkerers, and anyone who wants to automate the weird stuff
+
+---
 
 ## Contributing
 
-We welcome contributions! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## Code of Conduct
-
-This project adheres to a [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code.
+PRs, issues, and weird use-cases welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).
