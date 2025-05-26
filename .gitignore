@@ -21,3 +21,4 @@ profile.cov
 .vscode/
 
 data/
+dist/
