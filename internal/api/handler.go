@@ -19,9 +19,10 @@ func New(store scheduler.Store) *Handler {
 
 func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		URL       string         `json:"url"`
-		Payload   map[string]any `json:"payload"`
-		ExecuteAt string         `json:"execute_at"` // RFC3339
+		URL       string            `json:"url"`
+		Headers   map[string]string `json:"headers"`
+		Payload   any               `json:"payload"`
+		ExecuteAt string            `json:"execute_at"` // RFC3339
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
@@ -42,6 +43,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	task := scheduler.Task{
 		ID:        uuid.NewString(),
 		URL:       req.URL,
+		Headers:   req.Headers,
 		Payload:   req.Payload,
 		ExecuteAt: t,
 	}
