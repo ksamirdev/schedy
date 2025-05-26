@@ -1,6 +1,6 @@
 # Schedy
 
-**Schedy** is a lightweight HTTP-based task scheduler that lets you schedule and execute tasks at specified times.
+Lightweight HTTP-based task scheduler that lets you schedule and execute tasks at specified times.
 
 ## Features
 
@@ -9,6 +9,10 @@
 - Simple and easy to integrate
 
 ## Getting Started
+
+### Prerequisites
+
+- Go 1.18+ installed
 
 ### Installation
 
@@ -37,3 +41,15 @@ Schedule a task:
 ```bash
 curl -X POST http://localhost:8080/tasks -d '{"execute_at":"2025-05-26T15:00:00Z","url":"https://webhook.site/8a741093-35cc-4085-9c0d-1e7f0c98ef9c", "payload": {"key": "value"}}' -H "Content-Type: application/json"
 ```
+
+## Contributing
+
+We welcome contributions! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+## Code of Conduct
+
+This project adheres to a [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code.
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
