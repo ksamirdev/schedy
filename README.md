@@ -26,10 +26,10 @@ Head to [Releases](https://github.com/ksamirdev/schedy/releases) and grab the la
 ### 2. Run
 
 ```bash
-./schedy
+./schedy --port 8081
 ```
 
-Schedy will listen on `:8080` by default.
+Schedy will listen on the port you specify with `--port` (default: `8080`).
 
 ---
 

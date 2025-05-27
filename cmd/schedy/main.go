@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +16,9 @@ import (
 )
 
 func main() {
+	port := flag.String("port", "8080", "port to listen on")
+	flag.Parse()
+
 	store, err := scheduler.NewBadgerStore("data")
 	if err != nil {
 		log.Fatal(err)
@@ -26,7 +30,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/tasks", handler.CreateTask)
 
-	srv := &http.Server{Addr: ":8080", Handler: mux}
+	addr := ":" + *port
+	srv := &http.Server{Addr: addr, Handler: mux}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -34,7 +39,7 @@ func main() {
 	go r.Start(ctx)
 
 	go func() {
-		log.Println("Listening on :8080")
+		log.Printf("Listening on %s", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
