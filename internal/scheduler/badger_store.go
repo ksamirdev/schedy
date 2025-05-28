@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
@@ -26,27 +27,39 @@ func (s *BadgerStore) Save(task Task) error {
 		return err
 	}
 	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte("task:"+task.ID), data)
+		// key format: "task:<timestamp>:<id>"
+		// zero-padded timestamp (%016d) ensuring proper lexicographical ordering.
+		k := fmt.Sprintf("task:%016d:%s", task.ExecuteAt.Unix(), task.ID)
+		return txn.Set([]byte(k), data)
 	})
 }
 
-func (s *BadgerStore) Delete(id string) error {
+func (s *BadgerStore) Delete(id string, timestamp int64) error {
 	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Delete([]byte("task:" + id))
+		k := fmt.Sprintf("task:%016d:%s", timestamp, id)
+		return txn.Delete([]byte(k))
 	})
 }
 
-func (s *BadgerStore) GetAll() ([]Task, error) {
+func (s *BadgerStore) GetDueTasks(start, end time.Time) ([]Task, error) {
 	var tasks []Task
+
+	startKey := fmt.Sprintf("task:%016d", start.Unix())
+	endKey := fmt.Sprintf("task:%016d", end.Unix())
+
 	err := s.db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
-		for it.Rewind(); it.Valid(); it.Next() {
+
+		for it.Seek([]byte(startKey)); it.Valid(); it.Next() {
 			item := it.Item()
 			key := item.Key()
-			if string(key[:5]) != "task:" {
-				continue
+
+			// exits if future record found
+			if string(key) > endKey {
+				break
 			}
+
 			err := item.Value(func(val []byte) error {
 				var t Task
 				if err := json.Unmarshal(val, &t); err == nil {
@@ -61,18 +74,4 @@ func (s *BadgerStore) GetAll() ([]Task, error) {
 		return nil
 	})
 	return tasks, err
-}
-
-func (s *BadgerStore) GetDueTasks(now time.Time) ([]Task, error) {
-	all, err := s.GetAll()
-	if err != nil {
-		return nil, err
-	}
-	var due []Task
-	for _, t := range all {
-		if now.After(t.ExecuteAt) {
-			due = append(due, t)
-		}
-	}
-	return due, nil
 }
