@@ -13,6 +13,7 @@ type Runner struct {
 	ticker   Ticker
 	store    scheduler.Store
 	executor *executor.Executor
+	interval time.Duration
 }
 
 func New(store scheduler.Store, executor *executor.Executor, interval time.Duration) *Runner {
@@ -20,6 +21,7 @@ func New(store scheduler.Store, executor *executor.Executor, interval time.Durat
 		ticker:   NewTicker(interval),
 		store:    store,
 		executor: executor,
+		interval: interval,
 	}
 }
 
@@ -30,13 +32,13 @@ func (r *Runner) Start(ctx context.Context) {
 			r.ticker.Stop()
 			return
 		case now := <-r.ticker.C():
-			r.runOnce(now)
+			r.runOnce(now, now.Add(r.interval))
 		}
 	}
 }
 
-func (r *Runner) runOnce(now time.Time) {
-	tasks, err := r.store.GetDueTasks(now)
+func (r *Runner) runOnce(start, end time.Time) {
+	tasks, err := r.store.GetDueTasks(start, end)
 	if err != nil {
 		log.Println("Failed to get due tasks:", err)
 		return
@@ -56,7 +58,7 @@ func (r *Runner) runOnce(now time.Time) {
 
 			log.Printf("#%d | Executing task: %s", i, t.ID)
 			if err := r.executor.Execute(t); err == nil {
-				_ = r.store.Delete(t.ID)
+				_ = r.store.Delete(t.ID, t.ExecuteAt.Unix())
 			}
 
 		}(task, i)
