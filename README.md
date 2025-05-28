@@ -1,3 +1,10 @@
+### 🚀 Try Schedify: [schedify.dev](https://schedify.dev)
+No auth required. No infrastructure to manage. Just simple, reliable task scheduling for developers.
+- 📖 [Read our Dead Simple Integration Guide](https://schedify.dev/5-min-guide)
+- 🆓 [Start Scheduling - It's free](https://schedify.dev/schedules)
+
+---
+
 # Schedy
 
 > **A self-hostable, ultra-lightweight HTTP task scheduler for the weird and wonderful automation you want.**
