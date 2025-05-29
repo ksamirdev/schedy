@@ -19,6 +19,7 @@ RUN --mount=type=cache,target=/go/pkg/mod/ \
 
 # Stage 2: Runtime
 FROM alpine:3.19
+RUN mkdir /data && chown nobody:nobody /data
 RUN apk --no-cache add ca-certificates
 WORKDIR /
 COPY --from=builder /schedy /schedy
