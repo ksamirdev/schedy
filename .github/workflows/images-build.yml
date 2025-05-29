@@ -6,6 +6,7 @@ on:
     tags: ["v*.*.*"]
   pull_request:
     branches: ["*"]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -42,6 +43,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=sha  # For PRs
+            ${{ github.event_name == 'workflow_dispatch' && 'latest' || '' }} # Add latest tag if manually triggered
 
       - name: Build and Push
         uses: docker/build-push-action@v5
