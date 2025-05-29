@@ -45,6 +45,7 @@ jobs:
             type=sha  # For PRs
             ${{ github.event_name == 'workflow_dispatch' && 'latest' || '' }} # Add latest tag if manually triggered
 
+
       - name: Build and Push
         uses: docker/build-push-action@v5
         with:
