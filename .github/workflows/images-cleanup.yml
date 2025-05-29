@@ -1,0 +1,15 @@
+name: Cleanup PR Images
+on:
+  schedule:
+    - cron: "0 0 * * 0" # Weekly
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old PR images
+        uses: snok/container-retention-policy@v2
+        with:
+          image-names: ${{ env.IMAGE_NAME }}
+          cut-off: 30 days ago
+          keep-at-least: 3
+          tags-keep: "pr-.*" # Target only PR images
