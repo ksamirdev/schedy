@@ -75,3 +75,30 @@ func (s *BadgerStore) GetDueTasks(start, end time.Time) ([]Task, error) {
 	})
 	return tasks, err
 }
+
+func (s *BadgerStore) ListTasks() ([]Task, error) {
+	var tasks []Task
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+
+		prefix := []byte("task:")
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			err := item.Value(func(val []byte) error {
+				var t Task
+				if err := json.Unmarshal(val, &t); err == nil {
+					tasks = append(tasks, t)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	return tasks, err
+}

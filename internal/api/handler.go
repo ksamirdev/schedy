@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,11 +11,33 @@ import (
 )
 
 type Handler struct {
-	Store scheduler.Store
+	Store  scheduler.Store
+	APIKey string
 }
 
 func New(store scheduler.Store) *Handler {
-	return &Handler{Store: store}
+	return &Handler{
+		Store:  store,
+		APIKey: os.Getenv("SCHEDY_API_KEY"),
+	}
+}
+
+// Middleware to check API key
+func (h *Handler) WithAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.APIKey != "" {
+			key := r.Header.Get("X-API-Key")
+			if key == "" {
+				http.Error(w, "missing API key", http.StatusUnauthorized)
+				return
+			}
+			if key != h.APIKey {
+				http.Error(w, "invalid API key", http.StatusForbidden)
+				return
+			}
+		}
+		next(w, r)
+	}
 }
 
 func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
@@ -54,4 +77,15 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(task)
+}
+
+// ListTasks returns all scheduled tasks (no status yet)
+func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := h.Store.ListTasks()
+	if err != nil {
+		http.Error(w, "could not list tasks", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tasks)
 }

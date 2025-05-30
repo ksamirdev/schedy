@@ -28,7 +28,8 @@ func main() {
 	handler := api.New(store)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/tasks", handler.CreateTask)
+	mux.HandleFunc("POST /tasks", handler.WithAuth(handler.CreateTask))
+	mux.HandleFunc("GET /tasks", handler.WithAuth(handler.ListTasks))
 
 	addr := ":" + *port
 	srv := &http.Server{Addr: addr, Handler: mux}
