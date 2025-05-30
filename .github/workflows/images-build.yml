@@ -47,7 +47,7 @@ jobs:
         id: get_tag
         if: github.event_name != 'pull_request'
         run: |
-          TAG=$(git describe --tags $(git rev-list --tags --max-count=1))
+          TAG=$(git describe --tags --match "v[0-9]*" --abbrev=0)
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Extract Metadata
@@ -60,7 +60,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=semver,pattern={{version}}
+            type=semver,pattern=v{{version}}
             type=sha
             ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'latest' || '' }}
             ${{ github.event_name == 'workflow_dispatch' && steps.get_tag.outputs.tag || '' }}
