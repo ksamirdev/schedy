@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -47,6 +48,12 @@ func (e *Executor) Execute(task scheduler.Task) error {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	_, err = e.client.Do(req)
-	return err
+	res, err := e.client.Do(req)
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("unexpected status code: %d", res.StatusCode)
+	}
+	defer res.Body.Close()
+
+	return nil
 }

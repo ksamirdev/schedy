@@ -46,6 +46,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 
 	for i, task := range tasks {
 		go func(t scheduler.Task, idx int) {
+			attempt := newAttempt(t.Retries, t.RetryInterval)
 			taskTime := time.Until(t.ExecuteAt)
 			if max(taskTime, 0) == 0 {
 				taskTime = 0
@@ -57,8 +58,17 @@ func (r *Runner) runOnce(start, end time.Time) {
 			<-timer.C()
 
 			log.Printf("#%d | Executing task: %s", i, t.ID)
-			if err := r.executor.Execute(t); err == nil {
-				_ = r.store.Delete(t.ID, t.ExecuteAt.Unix())
+
+			for {
+				if err := r.executor.Execute(t); err == nil {
+					_ = r.store.Delete(t.ID, t.ExecuteAt.Unix())
+					break
+				}
+				if attempt.next() {
+					log.Printf("Retrying task: %s (attempt %d/%d)", t.ID, attempt.count, attempt.strategy.retries)
+					continue
+				}
+				break
 			}
 
 		}(task, i)

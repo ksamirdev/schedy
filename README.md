@@ -97,6 +97,8 @@ curl -X POST http://localhost:8080/tasks \
 - `url`: Where to POST
 - `headers`: (optional) Map of HTTP headers
 - `payload`: (optional) Anything: JSON, string, bytes, form data, etc.
+- `retries`: (optional) Number of retries.
+- `retries_interval`: (optional) Wait time between retries in milliseconds (default: 2000).
 
 #### Examples
 
