@@ -146,7 +146,7 @@ curl -X POST http://localhost:8080/tasks \
 Send a GET to `/tasks/list` (requires `X-API-Key` header if enabled):
 
 ```bash
-curl -X GET http://localhost:8080/tasks/list \
+curl -X GET http://localhost:8080/tasks \
   -H "X-API-Key: your-secret"
 ```
 
