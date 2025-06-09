@@ -97,6 +97,8 @@ curl -X POST http://localhost:8080/tasks \
 - `url`: Where to POST
 - `headers`: (optional) Map of HTTP headers
 - `payload`: (optional) Anything: JSON, string, bytes, form data, etc.
+- `retries`: (optional) Number of retries.
+- `retry_interval`: (optional) Wait time between retries in milliseconds (default: 2000).
 
 #### Examples
 
@@ -146,7 +148,7 @@ curl -X POST http://localhost:8080/tasks \
 Send a GET to `/tasks/list` (requires `X-API-Key` header if enabled):
 
 ```bash
-curl -X GET http://localhost:8080/tasks/list \
+curl -X GET http://localhost:8080/tasks \
   -H "X-API-Key: your-secret"
 ```
 

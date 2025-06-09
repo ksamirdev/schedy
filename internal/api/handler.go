@@ -10,6 +10,8 @@ import (
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
 
+const DEFAULT_RETRY_INTERVAL = 2000
+
 type Handler struct {
 	Store  scheduler.Store
 	APIKey string
@@ -42,10 +44,12 @@ func (h *Handler) WithAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		URL       string            `json:"url"`
-		Headers   map[string]string `json:"headers"`
-		Payload   any               `json:"payload"`
-		ExecuteAt string            `json:"execute_at"` // RFC3339
+		URL           string            `json:"url"`
+		Headers       map[string]string `json:"headers"`
+		Payload       any               `json:"payload"`
+		ExecuteAt     string            `json:"execute_at"` // RFC3339
+		Retries       int               `json:"retries"`
+		RetryInterval *int              `json:"retry_interval"` // milliseconds
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
@@ -63,12 +67,19 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.RetryInterval == nil {
+		req.RetryInterval = new(int)
+		*req.RetryInterval = DEFAULT_RETRY_INTERVAL
+	}
+
 	task := scheduler.Task{
-		ID:        uuid.NewString(),
-		URL:       req.URL,
-		Headers:   req.Headers,
-		Payload:   req.Payload,
-		ExecuteAt: t,
+		ID:            uuid.NewString(),
+		URL:           req.URL,
+		Headers:       req.Headers,
+		Payload:       req.Payload,
+		ExecuteAt:     t,
+		Retries:       req.Retries,
+		RetryInterval: *req.RetryInterval,
 	}
 	if err := h.Store.Save(task); err != nil {
 		http.Error(w, "could not save task", http.StatusInternalServerError)
