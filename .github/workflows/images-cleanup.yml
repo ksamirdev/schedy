@@ -9,11 +9,15 @@ env:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
     steps:
       - name: Delete old PR images
         uses: snok/container-retention-policy@v2
         with:
           image-names: ${{ env.IMAGE_NAME }}
-          cut-off: 30 days ago
+          cut-off: 30 days ago UTC
+          account-type: personal
           keep-at-least: 3
-          tags-keep: "pr-.*" # Target only PR images
+          filter-tags: "pr-*"
+          token: ${{ secrets.GITHUB_TOKEN }}
