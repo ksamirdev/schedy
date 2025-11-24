@@ -195,6 +195,42 @@ func TestCreateTaskHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+
+	t.Run("idempotency - duplicate task", func(t *testing.T) {
+		executeAt := time.Now().Add(2 * time.Hour)
+		reqBody := map[string]interface{}{
+			"url":        "http://example.com/unique-webhook",
+			"execute_at": executeAt.Format(time.RFC3339),
+		}
+		body, _ := json.Marshal(reqBody)
+
+		// Create first task
+		req1 := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
+		req1.Header.Set("Content-Type", "application/json")
+		req1.Header.Set("X-API-Key", "test-api-key")
+		w1 := httptest.NewRecorder()
+		handler.CreateTask(w1, req1)
+		assert.Equal(t, http.StatusCreated, w1.Code)
+
+		var firstTask scheduler.Task
+		json.Unmarshal(w1.Body.Bytes(), &firstTask)
+
+		// Try to create duplicate task
+		body2, _ := json.Marshal(reqBody)
+		req2 := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body2))
+		req2.Header.Set("Content-Type", "application/json")
+		req2.Header.Set("X-API-Key", "test-api-key")
+		req2.Header.Set("Idempotency-Key", "test-key-123")
+		w2 := httptest.NewRecorder()
+		handler.CreateTask(w2, req2)
+
+		// Should return 200 (not 201) and return existing task
+		assert.Equal(t, http.StatusOK, w2.Code)
+
+		var returnedTask scheduler.Task
+		json.Unmarshal(w2.Body.Bytes(), &returnedTask)
+		assert.Equal(t, firstTask.ID, returnedTask.ID)
+	})
 }
 
 func TestListTasksHandler(t *testing.T) {

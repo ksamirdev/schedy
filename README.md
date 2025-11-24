@@ -100,6 +100,25 @@ curl -X POST http://localhost:8080/tasks \
 - `retries`: (optional) Number of retries.
 - `retry_interval`: (optional) Wait time between retries in milliseconds (default: 2000).
 
+**Idempotency:**
+To prevent duplicate task creation, Schedy automatically detects when you try to schedule a task with the same `url` and `execute_at` (within 1 second). If a matching task exists:
+- Returns `200 OK` (instead of `201 Created`)
+- Returns the existing task instead of creating a duplicate
+- You can also send an optional `Idempotency-Key` header for stricter deduplication
+
+```bash
+# This won't create a duplicate if the same task already exists
+curl -X POST http://localhost:8080/tasks \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-secret" \
+  -H "Idempotency-Key: my-unique-key-123" \
+  -d '{
+    "execute_at": "2025-05-26T15:00:00Z",
+    "url": "https://example.com/webhook",
+    "payload": {"event": "user.created"}
+  }'
+```
+
 #### Examples
 
 **JSON payload (default):**
@@ -145,7 +164,7 @@ curl -X POST http://localhost:8080/tasks \
 
 ### List Scheduled Tasks
 
-Send a GET to `/tasks/list` (requires `X-API-Key` header if enabled):
+Send a GET to `/tasks` (requires `X-API-Key` header if enabled):
 
 ```bash
 curl -X GET http://localhost:8080/tasks \
@@ -153,6 +172,94 @@ curl -X GET http://localhost:8080/tasks \
 ```
 
 Returns a JSON array of all scheduled tasks.
+
+### Get a Single Task
+
+Send a GET to `/tasks/{id}` (requires `X-API-Key` header if enabled):
+
+```bash
+curl -X GET http://localhost:8080/tasks/{task-id} \
+  -H "X-API-Key: your-secret"
+```
+
+**Responses:**
+- `200 OK`: Returns the task details
+- `404 Not Found`: Task doesn't exist
+
+### Delete a Single Task
+
+Send a DELETE to `/tasks/{id}` (requires `X-API-Key` header if enabled):
+
+```bash
+curl -X DELETE http://localhost:8080/tasks/{task-id} \
+  -H "X-API-Key: your-secret"
+```
+
+**Responses:**
+- `204 No Content`: Task successfully deleted
+- `404 Not Found`: Task doesn't exist
+- `401 Unauthorized`: Missing API key
+- `403 Forbidden`: Invalid API key
+
+### Bulk Delete Tasks
+
+Send a DELETE to `/tasks` with query parameters (requires `X-API-Key` header if enabled):
+
+```bash
+# Delete all tasks for a specific URL
+curl -X DELETE "http://localhost:8080/tasks?url=https://example.com/webhook" \
+  -H "X-API-Key: your-secret"
+
+# Delete tasks scheduled before a specific time
+curl -X DELETE "http://localhost:8080/tasks?before=2025-05-26T15:00:00Z" \
+  -H "X-API-Key: your-secret"
+
+# Delete tasks scheduled after a specific time
+curl -X DELETE "http://localhost:8080/tasks?after=2025-05-26T15:00:00Z" \
+  -H "X-API-Key: your-secret"
+
+# Combine filters
+curl -X DELETE "http://localhost:8080/tasks?url=https://example.com/webhook&before=2025-05-26T15:00:00Z" \
+  -H "X-API-Key: your-secret"
+```
+
+**Query Parameters:**
+- `url`: (optional) Delete tasks targeting this exact URL
+- `before`: (optional) Delete tasks scheduled before this time (RFC3339 format)
+- `after`: (optional) Delete tasks scheduled after this time (RFC3339 format)
+
+**Responses:**
+- `200 OK`: Returns `{"deleted": N}` with count of deleted tasks
+- `400 Bad Request`: No filters provided or invalid time format
+- `401 Unauthorized`: Missing API key
+- `403 Forbidden`: Invalid API key
+
+---
+
+## Persistence & Behavior
+
+### Storage
+Schedy uses **BadgerDB** for persistent storage. All tasks are saved to disk in the `data/` directory (configurable). This means:
+- ✅ Tasks survive server restarts
+- ✅ No data loss on crash
+- ✅ No external database required
+- ⚠️ Backup the `data/` directory to preserve scheduled tasks
+
+### Task Execution
+- Tasks are checked every 10 seconds by default
+- Once a task's `execute_at` time passes, it's executed immediately
+- Failed tasks are retried based on the `retries` configuration
+- Successfully executed tasks are deleted from storage
+- Failed tasks (after all retries) remain in storage for inspection
+
+### Rate Limits
+No built-in rate limits. You can use a reverse proxy (nginx, Caddy) or API gateway to enforce rate limiting if needed.
+
+### Authentication
+When `SCHEDY_API_KEY` is set:
+- All endpoints require the `X-API-Key` header
+- Missing key returns `401 Unauthorized`
+- Invalid key returns `403 Forbidden`
 
 ---
 

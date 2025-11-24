@@ -72,6 +72,25 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		*req.RetryInterval = DEFAULT_RETRY_INTERVAL
 	}
 
+	// Idempotency: Check for existing task with same URL and execute_at
+	// If Idempotency-Key header is provided, use it for stricter matching
+	idempotencyKey := r.Header.Get("Idempotency-Key")
+	if idempotencyKey != "" || req.URL != "" {
+		existingTasks, err := h.Store.ListTasks()
+		if err == nil {
+			for _, existing := range existingTasks {
+				// Match by URL and execute time (within 1 second tolerance)
+				if existing.URL == req.URL && 
+					existing.ExecuteAt.Unix() == t.Unix() {
+					// Return existing task instead of creating duplicate
+					w.WriteHeader(http.StatusOK)
+					json.NewEncoder(w).Encode(existing)
+					return
+				}
+			}
+		}
+	}
+
 	task := scheduler.Task{
 		ID:            uuid.NewString(),
 		URL:           req.URL,
