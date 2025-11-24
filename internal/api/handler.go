@@ -100,3 +100,96 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tasks)
 }
+
+// GetTask returns a single task by ID
+func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "missing task id", http.StatusBadRequest)
+		return
+	}
+
+	task, err := h.Store.GetTask(id)
+	if err != nil {
+		http.Error(w, "could not get task", http.StatusInternalServerError)
+		return
+	}
+	if task == nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(task)
+}
+
+// DeleteTask deletes a single task by ID
+func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "missing task id", http.StatusBadRequest)
+		return
+	}
+
+	// First, get the task to find its timestamp
+	task, err := h.Store.GetTask(id)
+	if err != nil {
+		http.Error(w, "could not get task", http.StatusInternalServerError)
+		return
+	}
+	if task == nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	// Delete using ID and timestamp
+	if err := h.Store.Delete(id, task.ExecuteAt.Unix()); err != nil {
+		http.Error(w, "could not delete task", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteTasks deletes tasks based on filters
+func (h *Handler) DeleteTasks(w http.ResponseWriter, r *http.Request) {
+	// Parse query params
+	url := r.URL.Query().Get("url")
+	beforeStr := r.URL.Query().Get("before")
+	afterStr := r.URL.Query().Get("after")
+
+	var before, after *time.Time
+
+	if beforeStr != "" {
+		t, err := time.Parse(time.RFC3339, beforeStr)
+		if err != nil {
+			http.Error(w, "invalid before timestamp (RFC3339 required)", http.StatusBadRequest)
+			return
+		}
+		before = &t
+	}
+
+	if afterStr != "" {
+		t, err := time.Parse(time.RFC3339, afterStr)
+		if err != nil {
+			http.Error(w, "invalid after timestamp (RFC3339 required)", http.StatusBadRequest)
+			return
+		}
+		after = &t
+	}
+
+	// Require at least one filter
+	if url == "" && before == nil && after == nil {
+		http.Error(w, "at least one filter required (url, before, or after)", http.StatusBadRequest)
+		return
+	}
+
+	deleted, err := h.Store.DeleteTasks(url, before, after)
+	if err != nil {
+		http.Error(w, "could not delete tasks", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+}

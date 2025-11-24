@@ -30,6 +30,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tasks", handler.WithAuth(handler.CreateTask))
 	mux.HandleFunc("GET /tasks", handler.WithAuth(handler.ListTasks))
+	mux.HandleFunc("GET /tasks/{id}", handler.WithAuth(handler.GetTask))
+	mux.HandleFunc("DELETE /tasks/{id}", handler.WithAuth(handler.DeleteTask))
+	mux.HandleFunc("DELETE /tasks", handler.WithAuth(handler.DeleteTasks))
 
 	addr := ":" + *port
 	srv := &http.Server{Addr: addr, Handler: mux}

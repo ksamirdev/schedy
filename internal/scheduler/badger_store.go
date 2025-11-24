@@ -102,3 +102,94 @@ func (s *BadgerStore) ListTasks() ([]Task, error) {
 
 	return tasks, err
 }
+
+// GetTask retrieves a single task by ID.
+// Returns nil if task doesn't exist.
+func (s *BadgerStore) GetTask(id string) (*Task, error) {
+	var task *Task
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+
+		prefix := []byte("task:")
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			err := item.Value(func(val []byte) error {
+				var t Task
+				if err := json.Unmarshal(val, &t); err != nil {
+					return err
+				}
+				if t.ID == id {
+					task = &t
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if task != nil {
+				break
+			}
+		}
+		return nil
+	})
+
+	return task, err
+}
+
+// DeleteTasks deletes tasks based on filters.
+// url: exact match on target URL (optional)
+// before: delete tasks scheduled before this time (optional)
+// after: delete tasks scheduled after this time (optional)
+// Returns the number of deleted tasks.
+func (s *BadgerStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
+	var deleted int
+
+	err := s.db.Update(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+
+		prefix := []byte("task:")
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			key := item.Key()
+
+			shouldDelete := false
+			err := item.Value(func(val []byte) error {
+				var t Task
+				if err := json.Unmarshal(val, &t); err != nil {
+					return err
+				}
+
+				// Apply filters
+				matches := true
+				if url != "" && t.URL != url {
+					matches = false
+				}
+				if before != nil && !t.ExecuteAt.Before(*before) {
+					matches = false
+				}
+				if after != nil && !t.ExecuteAt.After(*after) {
+					matches = false
+				}
+
+				shouldDelete = matches
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+
+			if shouldDelete {
+				if err := txn.Delete(key); err != nil {
+					return err
+				}
+				deleted++
+			}
+		}
+		return nil
+	})
+
+	return deleted, err
+}
