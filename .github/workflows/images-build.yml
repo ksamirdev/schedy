@@ -65,7 +65,8 @@ jobs:
             ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'latest' || '' }}
             ${{ github.event_name == 'workflow_dispatch' && steps.get_tag.outputs.tag || '' }}
 
-      - name: Build and Push
+      - name: Build and Push (main/releases)
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -75,5 +76,28 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          outputs: |
-            ${{ github.event_name == 'pull_request' && 'type=registry,push=false' || '' }}
+        continue-on-error: false
+
+      - name: Build and Push (PRs)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max,ignore-error=true
+
+      - name: Retry Build on Cache Failure
+        if: failure() && github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          no-cache: true
