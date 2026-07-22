@@ -82,32 +82,32 @@ func (m *mockStore) ListTasks(status string) ([]scheduler.Task, error) {
 func (m *mockStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
 	count := 0
 	toDelete := []string{}
-	
+
 	for id, task := range m.tasks {
 		match := true
-		
+
 		if url != "" && task.URL != url {
 			match = false
 		}
-		
+
 		if before != nil && !task.ExecuteAt.Before(*before) {
 			match = false
 		}
-		
+
 		if after != nil && !task.ExecuteAt.After(*after) {
 			match = false
 		}
-		
+
 		if match {
 			toDelete = append(toDelete, id)
 			count++
 		}
 	}
-	
+
 	for _, id := range toDelete {
 		delete(m.tasks, id)
 	}
-	
+
 	return count, nil
 }
 

@@ -80,7 +80,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			for _, existing := range existingTasks {
 				// Match by URL and execute time (within 1 second tolerance)
-				if existing.URL == req.URL && 
+				if existing.URL == req.URL &&
 					existing.ExecuteAt.Unix() == t.Unix() {
 					// Return existing task instead of creating duplicate
 					w.WriteHeader(http.StatusOK)
