@@ -219,3 +219,18 @@ func (h *Handler) DeleteTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
 }
+
+// Health is a liveness probe. Always returns 200 OK.
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+// Ready is a readiness probe. Returns 200 if database is accessible, 503 otherwise.
+func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
+	_, err := h.Store.ListTasks("")
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}

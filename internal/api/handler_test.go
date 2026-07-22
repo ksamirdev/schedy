@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -594,5 +595,102 @@ func TestDeleteTasksHandler(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		assert.Equal(t, 0, resp["deleted"])
+	})
+}
+
+func TestHealthHandler(t *testing.T) {
+	store := newMockStore()
+	handler := New(store)
+
+	t.Run("always returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		w := httptest.NewRecorder()
+
+		handler.Health(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, w.Body.String())
+	})
+
+	t.Run("no auth required", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		// Intentionally not setting API key header
+		w := httptest.NewRecorder()
+
+		handler.Health(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+}
+
+type failingStore struct{}
+
+func (f *failingStore) Save(task scheduler.Task) error {
+	return nil
+}
+
+func (f *failingStore) Update(task scheduler.Task) error {
+	return nil
+}
+
+func (f *failingStore) RecoverRunning() error {
+	return nil
+}
+
+func (f *failingStore) GetDueTasks(start, end time.Time) ([]scheduler.Task, error) {
+	return nil, nil
+}
+
+func (f *failingStore) Delete(id string) error {
+	return nil
+}
+
+func (f *failingStore) GetTask(id string) (*scheduler.Task, error) {
+	return nil, nil
+}
+
+func (f *failingStore) ListTasks(status string) ([]scheduler.Task, error) {
+	return nil, errors.New("database connection failed")
+}
+
+func (f *failingStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
+	return 0, nil
+}
+
+func TestReadyHandler(t *testing.T) {
+	t.Run("returns 200 when database accessible", func(t *testing.T) {
+		store := newMockStore()
+		handler := New(store)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		w := httptest.NewRecorder()
+
+		handler.Ready(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, w.Body.String())
+	})
+
+	t.Run("returns 503 when database fails", func(t *testing.T) {
+		handler := New(&failingStore{})
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		w := httptest.NewRecorder()
+
+		handler.Ready(w, req)
+
+		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	})
+
+	t.Run("no auth required", func(t *testing.T) {
+		store := newMockStore()
+		handler := New(store)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		w := httptest.NewRecorder()
+
+		handler.Ready(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
 	})
 }
