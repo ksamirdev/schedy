@@ -1,0 +1,4 @@
+verifyDepsBeforeRun: false
+onlyBuiltDependencies:
+  - "@swc/core"
+  - core-js

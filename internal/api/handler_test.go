@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -25,21 +26,37 @@ func newMockStore() *mockStore {
 }
 
 func (m *mockStore) Save(task scheduler.Task) error {
+	task.Status = scheduler.StatusPending
 	m.tasks[task.ID] = task
+	return nil
+}
+
+func (m *mockStore) Update(task scheduler.Task) error {
+	m.tasks[task.ID] = task
+	return nil
+}
+
+func (m *mockStore) RecoverRunning() error {
+	for id, task := range m.tasks {
+		if task.Status == scheduler.StatusRunning {
+			task.Status = scheduler.StatusPending
+			m.tasks[id] = task
+		}
+	}
 	return nil
 }
 
 func (m *mockStore) GetDueTasks(start, end time.Time) ([]scheduler.Task, error) {
 	var tasks []scheduler.Task
 	for _, task := range m.tasks {
-		if task.ExecuteAt.After(start) && task.ExecuteAt.Before(end) {
+		if task.Status == scheduler.StatusPending && !task.ExecuteAt.After(end) {
 			tasks = append(tasks, task)
 		}
 	}
 	return tasks, nil
 }
 
-func (m *mockStore) Delete(id string, executeAt int64) error {
+func (m *mockStore) Delete(id string) error {
 	delete(m.tasks, id)
 	return nil
 }
@@ -51,9 +68,12 @@ func (m *mockStore) GetTask(id string) (*scheduler.Task, error) {
 	return nil, nil
 }
 
-func (m *mockStore) ListTasks() ([]scheduler.Task, error) {
+func (m *mockStore) ListTasks(status string) ([]scheduler.Task, error) {
 	var tasks []scheduler.Task
 	for _, task := range m.tasks {
+		if status != "" && string(task.Status) != status {
+			continue
+		}
 		tasks = append(tasks, task)
 	}
 	return tasks, nil
@@ -355,9 +375,10 @@ func TestDeleteTaskHandler(t *testing.T) {
 
 		assert.Equal(t, http.StatusNoContent, w.Code)
 
-		// Verify task was deleted
+		// Soft-cancel: task retained in history, marked cancelled
 		retrieved, _ := store.GetTask("task123")
-		assert.Nil(t, retrieved)
+		require.NotNil(t, retrieved)
+		assert.Equal(t, scheduler.StatusCancelled, retrieved.Status)
 	})
 
 	t.Run("task not found", func(t *testing.T) {
@@ -424,7 +445,7 @@ func TestDeleteTasksHandler(t *testing.T) {
 		store.Save(task3)
 
 		before := now.Add(90 * time.Minute).Format(time.RFC3339)
-		req := httptest.NewRequest(http.MethodDelete, "/tasks?before="+before, nil)
+		req := httptest.NewRequest(http.MethodDelete, "/tasks?before="+url.QueryEscape(before), nil)
 		req.Header.Set("X-API-Key", "test-api-key")
 		w := httptest.NewRecorder()
 
@@ -452,7 +473,7 @@ func TestDeleteTasksHandler(t *testing.T) {
 		store.Save(task3)
 
 		after := now.Add(90 * time.Minute).Format(time.RFC3339)
-		req := httptest.NewRequest(http.MethodDelete, "/tasks?after="+after, nil)
+		req := httptest.NewRequest(http.MethodDelete, "/tasks?after="+url.QueryEscape(after), nil)
 		req.Header.Set("X-API-Key", "test-api-key")
 		w := httptest.NewRecorder()
 
@@ -483,7 +504,7 @@ func TestDeleteTasksHandler(t *testing.T) {
 
 		before := now.Add(150 * time.Minute).Format(time.RFC3339)
 		after := now.Add(30 * time.Minute).Format(time.RFC3339)
-		req := httptest.NewRequest(http.MethodDelete, "/tasks?url=http://example.com/webhook&before="+before+"&after="+after, nil)
+		req := httptest.NewRequest(http.MethodDelete, "/tasks?url=http://example.com/webhook&before="+url.QueryEscape(before)+"&after="+url.QueryEscape(after), nil)
 		req.Header.Set("X-API-Key", "test-api-key")
 		w := httptest.NewRecorder()
 

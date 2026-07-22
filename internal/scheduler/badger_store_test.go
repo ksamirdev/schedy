@@ -13,7 +13,7 @@ import (
 func setupBadgerDB(t *testing.T) (*BadgerStore, func()) {
 	path := "./testdb_" + uuid.New().String()
 
-	store, err := NewBadgerStore(path)
+	store, err := NewBadgerStore(path, 72*time.Hour)
 	require.NoError(t, err)
 
 	cleanup := func() {
@@ -58,12 +58,80 @@ func TestSaveAndGetTasks(t *testing.T) {
 	assert.Equal(t, "task1", tasks[0].ID)
 
 	// Test Delete
-	err = store.Delete(task1.ID, task1.ExecuteAt.Unix())
+	err = store.Delete(task1.ID)
 	require.NoError(t, err)
 	tasks, err = store.GetDueTasks(now, now.Add(15*time.Second))
 	require.NoError(t, err)
 	assert.Len(t, tasks, 1)
 	assert.Equal(t, "task2", tasks[0].ID)
+}
+
+func TestStatusLifecycle(t *testing.T) {
+	store, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	task := Task{ID: "t1", ExecuteAt: now.Add(5 * time.Second), URL: "http://x/1"}
+	require.NoError(t, store.Save(task))
+
+	// Save forces pending, and pending tasks show up as due.
+	got, err := store.GetTask("t1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, StatusPending, got.Status)
+
+	due, err := store.GetDueTasks(now, now.Add(15*time.Second))
+	require.NoError(t, err)
+	assert.Len(t, due, 1)
+
+	// Transition to a terminal status: it must leave the pending keyspace so
+	// the due-query never re-fires it.
+	got.Status = StatusSucceeded
+	got.Attempts = []Attempt{{N: 1, StatusCode: 200}}
+	require.NoError(t, store.Update(*got))
+
+	due, err = store.GetDueTasks(now, now.Add(15*time.Second))
+	require.NoError(t, err)
+	assert.Empty(t, due, "terminal task must not be due")
+
+	// Still queryable by id and by status filter.
+	got, err = store.GetTask("t1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, StatusSucceeded, got.Status)
+	assert.Len(t, got.Attempts, 1)
+
+	succeeded, err := store.ListTasks(string(StatusSucceeded))
+	require.NoError(t, err)
+	assert.Len(t, succeeded, 1)
+
+	pending, err := store.ListTasks(string(StatusPending))
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+}
+
+func TestRecoverRunning(t *testing.T) {
+	store, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	// A recovered task is always past-due (it was already due when it ran).
+	task := Task{ID: "t1", ExecuteAt: now.Add(-5 * time.Second)}
+	require.NoError(t, store.Save(task))
+
+	// Simulate a crash mid-run: task stuck in running.
+	task.Status = StatusRunning
+	require.NoError(t, store.Update(task))
+	due, _ := store.GetDueTasks(now, now.Add(15*time.Second))
+	require.Empty(t, due)
+
+	// Recovery re-queues it to pending, and the due-scan must catch it up
+	// despite its ExecuteAt being in the past.
+	require.NoError(t, store.RecoverRunning())
+	due, err := store.GetDueTasks(now, now.Add(15*time.Second))
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	assert.Equal(t, StatusPending, due[0].Status)
 }
 
 func TestKeyOrdering(t *testing.T) {

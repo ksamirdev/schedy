@@ -76,7 +76,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// If Idempotency-Key header is provided, use it for stricter matching
 	idempotencyKey := r.Header.Get("Idempotency-Key")
 	if idempotencyKey != "" || req.URL != "" {
-		existingTasks, err := h.Store.ListTasks()
+		existingTasks, err := h.Store.ListTasks(string(scheduler.StatusPending))
 		if err == nil {
 			for _, existing := range existingTasks {
 				// Match by URL and execute time (within 1 second tolerance)
@@ -99,6 +99,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		ExecuteAt:     t,
 		Retries:       req.Retries,
 		RetryInterval: *req.RetryInterval,
+		Status:        scheduler.StatusPending,
 	}
 	if err := h.Store.Save(task); err != nil {
 		http.Error(w, "could not save task", http.StatusInternalServerError)
@@ -109,9 +110,10 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
-// ListTasks returns all scheduled tasks (no status yet)
+// ListTasks returns scheduled tasks, optionally filtered by ?status=.
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
-	tasks, err := h.Store.ListTasks()
+	status := r.URL.Query().Get("status")
+	tasks, err := h.Store.ListTasks(status)
 	if err != nil {
 		http.Error(w, "could not list tasks", http.StatusInternalServerError)
 		return
@@ -142,7 +144,9 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
-// DeleteTask deletes a single task by ID
+// DeleteTask cancels a single task by ID. Non-terminal tasks are soft-cancelled
+// (marked cancelled and retained in history); already-terminal tasks are a no-op
+// and expire on their own via TTL.
 func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -150,7 +154,6 @@ func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// First, get the task to find its timestamp
 	task, err := h.Store.GetTask(id)
 	if err != nil {
 		http.Error(w, "could not get task", http.StatusInternalServerError)
@@ -161,10 +164,14 @@ func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete using ID and timestamp
-	if err := h.Store.Delete(id, task.ExecuteAt.Unix()); err != nil {
-		http.Error(w, "could not delete task", http.StatusInternalServerError)
-		return
+	if !task.Status.IsTerminal() {
+		now := time.Now().UTC()
+		task.Status = scheduler.StatusCancelled
+		task.FinishedAt = &now
+		if err := h.Store.Update(*task); err != nil {
+			http.Error(w, "could not cancel task", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
