@@ -81,7 +81,7 @@ spec:
           claimName: schedy-data
 ```
 
-For more details on health probes, see [Health checks](../api/health.md).
+For more details on health probes, see [Health checks](./api/health.md).
 
 ## Persistence
 
