@@ -2,22 +2,27 @@ name: Cleanup PR Images
 on:
   schedule:
     - cron: "0 0 * * 0" # Weekly
-
-env:
-  IMAGE_NAME: ${{ github.repository_owner }}/schedy
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "List what would be deleted without deleting"
+        type: boolean
+        default: true
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    permissions:
-      packages: write
     steps:
       - name: Delete old PR images
         uses: snok/container-retention-policy@v2
         with:
-          image-names: ${{ env.IMAGE_NAME }}
+          # Bare package name, not owner/name.
+          image-names: schedy
           cut-off: 30 days ago UTC
           account-type: personal
           keep-at-least: 3
           filter-tags: "pr-*"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN cannot delete packages on a personal account.
+          # Requires a classic PAT with read:packages + delete:packages.
+          token: ${{ secrets.GHCR_CLEANUP_TOKEN }}
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || 'false' }}
