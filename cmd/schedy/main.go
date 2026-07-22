@@ -44,6 +44,8 @@ func main() {
 	handler := api.New(store)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", handler.Health)
+	mux.HandleFunc("GET /readyz", handler.Ready)
 	mux.HandleFunc("POST /tasks", handler.WithAuth(handler.CreateTask))
 	mux.HandleFunc("GET /tasks", handler.WithAuth(handler.ListTasks))
 	mux.HandleFunc("GET /tasks/{id}", handler.WithAuth(handler.GetTask))
