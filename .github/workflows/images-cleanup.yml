@@ -1,4 +1,4 @@
-name: Cleanup PR Images
+name: Cleanup Container Images
 on:
   schedule:
     - cron: "0 0 * * 0" # Weekly
@@ -10,20 +10,31 @@ on:
         default: true
 
 jobs:
-  cleanup:
+  cleanup-pr-and-branch:
     runs-on: ubuntu-latest
     steps:
-      - name: Delete old PR images
+      - name: Delete PR and branch images
         uses: snok/container-retention-policy@v3.1.0
         with:
-          # "user" for a personal account, org name for an org.
           account: user
-          # GITHUB_TOKEN cannot delete packages on a personal account.
-          # Requires a classic PAT with read:packages + delete:packages.
           token: ${{ secrets.GHCR_CLEANUP_TOKEN }}
           image-names: schedy
-          image-tags: "pr-*"
+          image-tags: "pr-*,main,sha-*"
           tag-selection: tagged
-          cut-off: 30d
-          keep-n-most-recent: 3
+          cut-off: 1d
+          keep-n-most-recent: 0
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || 'false' }}
+
+  cleanup-untagged:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete untagged images
+        uses: snok/container-retention-policy@v3.1.0
+        with:
+          account: user
+          token: ${{ secrets.GHCR_CLEANUP_TOKEN }}
+          image-names: schedy
+          tag-selection: untagged
+          cut-off: 1d
+          keep-n-most-recent: 0
           dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || 'false' }}

@@ -2,8 +2,13 @@ name: Docker
 
 on:
   push:
-    tags: ["v*.*.*"] # publish on version tags
+    tags: ["v*.*.*"] # publish on version tags only
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Push image to registry (only for testing, use version tags for production)"
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -28,10 +33,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      # Only a version tag publishes. Branch pushes and PRs are build-only tests.
+      # Only version tags publish automatically. workflow_dispatch requires explicit input.
       - name: Decide whether to publish
         id: flag
-        run: echo "push=${{ startsWith(github.ref, 'refs/tags/v') }}" >> "$GITHUB_OUTPUT"
+        run: |
+          is_version_tag=${{ startsWith(github.ref, 'refs/tags/v') }}
+          is_manual_publish=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true' }}
+          echo "push=$([ "$is_version_tag" = "true" ] || [ "$is_manual_publish" = "true" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Login to GitHub Container Registry
         if: steps.flag.outputs.push == 'true'
