@@ -61,6 +61,10 @@ survive restarts - back it up to preserve scheduled tasks.
 PRs, issues, and weird use-cases welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
 and our [Code of Conduct](CODE_OF_CONDUCT.md).
 
+## Support Schedy
+
+This project's future depends on community support. [Become a sponsor today.](https://github.com/sponsors/ksamirdev)
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
