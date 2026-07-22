@@ -2,6 +2,31 @@ package scheduler
 
 import "time"
 
+// TaskStatus is the lifecycle state of a Task. Exactly one at any time.
+type TaskStatus string
+
+const (
+	StatusPending   TaskStatus = "pending"   // accepted, no attempt started yet
+	StatusRunning   TaskStatus = "running"   // at least one attempt fired, not terminal
+	StatusSucceeded TaskStatus = "succeeded" // an attempt got a 2xx response
+	StatusFailed    TaskStatus = "failed"    // retries exhausted, last attempt non-2xx/error
+	StatusCancelled TaskStatus = "cancelled" // user deleted before terminal
+)
+
+// IsTerminal reports whether the status is a final, retained-then-purged state.
+func (s TaskStatus) IsTerminal() bool {
+	return s == StatusSucceeded || s == StatusFailed || s == StatusCancelled
+}
+
+// Attempt records one HTTP POST fired at the Task's url.
+type Attempt struct {
+	N          int       `json:"n"`               // 1-based attempt number
+	FiredAt    time.Time `json:"fired_at"`        // when the request went out
+	StatusCode int       `json:"status_code"`     // HTTP status, 0 on transport error
+	Error      string    `json:"error,omitempty"` // transport or non-2xx description
+	DurationMs int64     `json:"duration_ms"`     // round-trip time in milliseconds
+}
+
 type Task struct {
 	ID            string            `json:"id"`
 	URL           string            `json:"url"`
@@ -10,4 +35,8 @@ type Task struct {
 	Payload       any               `json:"payload"` // Flexible payload
 	Retries       int               `json:"retries"`
 	RetryInterval int               `json:"retry_interval"` // milliseconds
+
+	Status     TaskStatus `json:"status"`
+	Attempts   []Attempt  `json:"attempts,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"` // set when terminal
 }

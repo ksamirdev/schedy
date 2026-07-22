@@ -57,20 +57,55 @@ func (r *Runner) runOnce(start, end time.Time) {
 
 			<-timer.C()
 
-			log.Printf("#%d | Executing task: %s", i, t.ID)
+			// The task may have been cancelled after it was picked up but
+			// before its timer fired. Re-read its current state and skip if it
+			// is no longer pending, so cancel wins the race.
+			// ponytail: residual TOCTOU between this read and the Update below
+			// (single process, microsecond window); add a CAS status transition
+			// in the store if that window ever matters.
+			if cur, err := r.store.GetTask(t.ID); err != nil || cur == nil || cur.Status != scheduler.StatusPending {
+				return
+			}
 
+			log.Printf("#%d | Executing task: %s", idx, t.ID)
+
+			t.Status = scheduler.StatusRunning
+			if err := r.store.Update(t); err != nil {
+				log.Printf("mark running %s: %v", t.ID, err)
+			}
+
+			n := 0
 			for {
-				if err := r.executor.Execute(t); err == nil {
-					_ = r.store.Delete(t.ID, t.ExecuteAt.Unix())
+				n++
+				res := r.executor.Execute(t)
+				att := scheduler.Attempt{
+					N:          n,
+					FiredAt:    time.Now().UTC(),
+					StatusCode: res.StatusCode,
+					DurationMs: res.Duration.Milliseconds(),
+				}
+				if res.Err != nil {
+					att.Error = res.Err.Error()
+				}
+				t.Attempts = append(t.Attempts, att)
+
+				if res.Err == nil {
+					t.Status = scheduler.StatusSucceeded
 					break
 				}
 				if attempt.next() {
 					log.Printf("Retrying task: %s (attempt %d/%d)", t.ID, attempt.count, attempt.strategy.retries)
 					continue
 				}
+				t.Status = scheduler.StatusFailed
 				break
 			}
 
+			now := time.Now().UTC()
+			t.FinishedAt = &now
+			if err := r.store.Update(t); err != nil {
+				log.Printf("finalize %s (%s): %v", t.ID, t.Status, err)
+			}
 		}(task, i)
 	}
 }

@@ -19,10 +19,26 @@ func main() {
 	port := flag.String("port", "8080", "port to listen on")
 	flag.Parse()
 
-	store, err := scheduler.NewBadgerStore("data")
+	// Terminal tasks are retained for history, then purged after this TTL.
+	historyTTL := 72 * time.Hour
+	if v := os.Getenv("SCHEDY_HISTORY_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			log.Fatalf("invalid SCHEDY_HISTORY_TTL: %v", err)
+		}
+		historyTTL = d
+	}
+
+	store, err := scheduler.NewBadgerStore("data", historyTTL)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Re-queue any tasks left mid-run by a previous crash/restart (at-least-once).
+	if err := store.RecoverRunning(); err != nil {
+		log.Printf("recover running tasks: %v", err)
+	}
+
 	exec := executor.NewExecutor()
 	r := runner.New(store, exec, 10*time.Second)
 	handler := api.New(store)
