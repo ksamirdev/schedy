@@ -14,15 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Delete old PR images
-        uses: snok/container-retention-policy@v2
+        uses: snok/container-retention-policy@v3.1.0
         with:
-          # Bare package name, not owner/name.
-          image-names: schedy
-          cut-off: 30 days ago UTC
-          account-type: personal
-          keep-at-least: 3
-          filter-tags: "pr-*"
+          # "user" for a personal account, org name for an org.
+          account: user
           # GITHUB_TOKEN cannot delete packages on a personal account.
           # Requires a classic PAT with read:packages + delete:packages.
           token: ${{ secrets.GHCR_CLEANUP_TOKEN }}
+          image-names: schedy
+          image-tags: "pr-*"
+          tag-selection: tagged
+          cut-off: 30d
+          keep-n-most-recent: 3
           dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || 'false' }}
