@@ -3,8 +3,6 @@ name: Docker
 on:
   push:
     tags: ["v*.*.*"] # publish on version tags
-  pull_request:
-    branches: ["*"] # build-only test, no push
   workflow_dispatch:
 
 env:
