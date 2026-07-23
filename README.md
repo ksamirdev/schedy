@@ -54,7 +54,9 @@ SCHEDY_API_KEY=your-secret ./schedy --port 8080
 ```
 
 Requires Go 1.23+. Tasks persist to the `data/` directory (BadgerDB), so they
-survive restarts - back it up to preserve scheduled tasks.
+survive restarts. To preserve scheduled tasks, take a safe online snapshot with
+`GET /admin/backup` (restore via `schedy restore <file>`) rather than copying the
+live directory - see the [docs](https://schedy.mintlify.site/backup).
 
 ## Contributing
 
