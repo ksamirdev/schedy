@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,6 +28,10 @@ var validMethods = map[string]bool{
 type Handler struct {
 	Store  scheduler.Store
 	APIKey string
+	// createMu serializes the findDuplicate + Save pair so two concurrent
+	// creates carrying the same Idempotency-Key can't both miss the duplicate
+	// check and both persist. Schedy is single-process, so one mutex is enough.
+	createMu sync.Mutex
 }
 
 func New(store scheduler.Store) *Handler {
@@ -174,17 +179,6 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	idempotencyKey := r.Header.Get("Idempotency-Key")
-	existing, err := h.findDuplicate(idempotencyKey, req.URL, t)
-	if err != nil {
-		http.Error(w, "could not check for duplicates", http.StatusInternalServerError)
-		return
-	}
-	if existing != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(existing)
-		return
-	}
 
 	task := scheduler.Task{
 		ID:             uuid.NewString(),
@@ -199,13 +193,30 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		RetryMode:      req.RetryMode,
 		Status:         scheduler.StatusPending,
 	}
-	if err := h.Store.Save(task); err != nil {
+
+	// findDuplicate scans then Save writes; without serialization two same-key
+	// creates can both miss the scan and both persist, defeating idempotency.
+	// Unlock before the response encode so a slow client can't stall every
+	// other create.
+	h.createMu.Lock()
+	existing, err := h.findDuplicate(idempotencyKey, req.URL, t)
+	if err == nil && existing == nil {
+		err = h.Store.Save(task)
+	}
+	h.createMu.Unlock()
+	if err != nil {
 		http.Error(w, "could not save task", http.StatusInternalServerError)
 		return
 	}
 
+	status := http.StatusCreated
+	if existing != nil {
+		task = *existing
+		status = http.StatusOK
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(task)
 }
 

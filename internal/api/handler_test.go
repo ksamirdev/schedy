@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -484,6 +485,55 @@ func TestCreateTaskDeduplication(t *testing.T) {
 		assert.Equal(t, http.StatusCreated, code)
 		assert.NotEqual(t, "done", task.ID)
 	})
+}
+
+// A burst of concurrent creates carrying the same Idempotency-Key must collapse
+// to a single task: exactly one 201, the rest 200, all pointing at one id. Run
+// with -race to also catch the unlocked findDuplicate+Save the mutex closes.
+func TestCreateTaskConcurrentIdempotency(t *testing.T) {
+	handler := New(newMockStore())
+
+	raw, _ := json.Marshal(map[string]any{
+		"url":        "http://example.com/a",
+		"execute_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+	})
+
+	const n = 32
+	var wg sync.WaitGroup
+	ids := make([]string, n)
+	codes := make([]int, n)
+	start := make(chan struct{})
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(raw))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "same-key")
+			w := httptest.NewRecorder()
+			<-start // release all goroutines at once to maximize contention
+			handler.CreateTask(w, req)
+			var task scheduler.Task
+			json.Unmarshal(w.Body.Bytes(), &task)
+			ids[i] = task.ID
+			codes[i] = w.Code
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	all, err := handler.Store.ListTasks("")
+	require.NoError(t, err)
+	assert.Len(t, all, 1, "concurrent same-key creates must persist exactly one task")
+
+	created := 0
+	for i := range ids {
+		assert.Equal(t, ids[0], ids[i], "every response must reference the same task id")
+		if codes[i] == http.StatusCreated {
+			created++
+		}
+	}
+	assert.Equal(t, 1, created, "exactly one request gets 201, the rest 200")
 }
 
 func TestUpdateTaskHandler(t *testing.T) {
