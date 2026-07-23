@@ -236,12 +236,12 @@ func TestCreateTaskHandler(t *testing.T) {
 		var firstTask scheduler.Task
 		json.Unmarshal(w1.Body.Bytes(), &firstTask)
 
-		// Try to create duplicate task
+		// Try to create duplicate task. No Idempotency-Key: this is the
+		// implicit same-url-same-time match. Key behaviour has its own test.
 		body2, _ := json.Marshal(reqBody)
 		req2 := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body2))
 		req2.Header.Set("Content-Type", "application/json")
 		req2.Header.Set("X-API-Key", "test-api-key")
-		req2.Header.Set("Idempotency-Key", "test-key-123")
 		w2 := httptest.NewRecorder()
 		handler.CreateTask(w2, req2)
 
@@ -348,6 +348,359 @@ func TestGetTaskHandler(t *testing.T) {
 		w := httptest.NewRecorder()
 
 		handler.WithAuth(handler.GetTask)(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+}
+
+func TestCreateTaskDeduplication(t *testing.T) {
+	postReq := func(key string, body any) *http.Request {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "test-api-key")
+		if key != "" {
+			req.Header.Set("Idempotency-Key", key)
+		}
+		return req
+	}
+
+	post := func(t *testing.T, handler *Handler, key string, body any) (int, scheduler.Task) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		handler.CreateTask(w, postReq(key, body))
+		var task scheduler.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &task))
+		return w.Code, task
+	}
+
+	newHandler := func() *Handler {
+		handler := New(newMockStore())
+		handler.APIKey = "test-api-key"
+		return handler
+	}
+
+	t.Run("an idempotency key matches on the key alone", func(t *testing.T) {
+		handler := newHandler()
+
+		code, first := post(t, handler, "key-123", map[string]any{
+			"url":        "http://example.com/a",
+			"execute_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+		})
+		require.Equal(t, http.StatusCreated, code)
+		assert.Equal(t, "key-123", first.IdempotencyKey)
+
+		// Same key, completely different schedule: still the same task.
+		code, second := post(t, handler, "key-123", map[string]any{
+			"url":        "http://example.com/totally-different",
+			"execute_at": time.Now().Add(9 * time.Hour).Format(time.RFC3339),
+		})
+		assert.Equal(t, http.StatusOK, code)
+		assert.Equal(t, first.ID, second.ID)
+		assert.Equal(t, "http://example.com/a", second.URL, "the original schedule is returned untouched")
+	})
+
+	t.Run("a different idempotency key creates a new task", func(t *testing.T) {
+		handler := newHandler()
+		body := map[string]any{
+			"url":        "http://example.com/a",
+			"execute_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+		}
+
+		code, first := post(t, handler, "key-a", body)
+		require.Equal(t, http.StatusCreated, code)
+
+		code, second := post(t, handler, "key-b", body)
+		assert.Equal(t, http.StatusCreated, code, "the key is the identity, so an identical schedule is not a duplicate")
+		assert.NotEqual(t, first.ID, second.ID)
+	})
+
+	t.Run("without a key, near-identical schedules deduplicate", func(t *testing.T) {
+		handler := newHandler()
+		base := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
+
+		// 100ms apart, but either side of a second boundary.
+		code, first := post(t, handler, "", map[string]any{
+			"url":        "http://example.com/a",
+			"execute_at": base.Add(900 * time.Millisecond).Format(time.RFC3339Nano),
+		})
+		require.Equal(t, http.StatusCreated, code)
+
+		code, second := post(t, handler, "", map[string]any{
+			"url":        "http://example.com/a",
+			"execute_at": base.Add(1 * time.Second).Format(time.RFC3339Nano),
+		})
+		assert.Equal(t, http.StatusOK, code)
+		assert.Equal(t, first.ID, second.ID)
+	})
+
+	t.Run("without a key, schedules a second or more apart are distinct", func(t *testing.T) {
+		handler := newHandler()
+		base := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
+
+		code, first := post(t, handler, "", map[string]any{
+			"url":        "http://example.com/a",
+			"execute_at": base.Format(time.RFC3339),
+		})
+		require.Equal(t, http.StatusCreated, code)
+
+		code, second := post(t, handler, "", map[string]any{
+			"url":        "http://example.com/a",
+			"execute_at": base.Add(2 * time.Second).Format(time.RFC3339),
+		})
+		assert.Equal(t, http.StatusCreated, code)
+		assert.NotEqual(t, first.ID, second.ID)
+	})
+
+	t.Run("without a key, a different url is not a duplicate", func(t *testing.T) {
+		handler := newHandler()
+		executeAt := time.Now().Add(1 * time.Hour).Format(time.RFC3339)
+
+		code, first := post(t, handler, "", map[string]any{"url": "http://example.com/a", "execute_at": executeAt})
+		require.Equal(t, http.StatusCreated, code)
+
+		code, second := post(t, handler, "", map[string]any{"url": "http://example.com/b", "execute_at": executeAt})
+		assert.Equal(t, http.StatusCreated, code)
+		assert.NotEqual(t, first.ID, second.ID)
+	})
+
+	t.Run("only pending tasks are deduplicated against", func(t *testing.T) {
+		handler := newHandler()
+		store := handler.Store.(*mockStore)
+		executeAt := time.Now().Add(1 * time.Hour)
+
+		store.tasks["done"] = scheduler.Task{
+			ID:             "done",
+			URL:            "http://example.com/a",
+			ExecuteAt:      executeAt,
+			IdempotencyKey: "key-123",
+			Status:         scheduler.StatusSucceeded,
+		}
+
+		code, task := post(t, handler, "key-123", map[string]any{
+			"url":        "http://example.com/a",
+			"execute_at": executeAt.Format(time.RFC3339),
+		})
+		assert.Equal(t, http.StatusCreated, code)
+		assert.NotEqual(t, "done", task.ID)
+	})
+}
+
+func TestUpdateTaskHandler(t *testing.T) {
+	// Seeds go in directly rather than through Save, which forces pending.
+	newHandler := func(seed ...scheduler.Task) (*mockStore, *Handler) {
+		store := newMockStore()
+		for _, task := range seed {
+			store.tasks[task.ID] = task
+		}
+		handler := New(store)
+		handler.APIKey = "test-api-key"
+		return store, handler
+	}
+
+	updateReq := func(id string, body any) *http.Request {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPut, "/tasks/"+id, bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "test-api-key")
+		req.SetPathValue("id", id)
+		return req
+	}
+
+	pendingTask := func() scheduler.Task {
+		return scheduler.Task{
+			ID:             "task123",
+			IdempotencyKey: "key-123",
+			URL:            "http://example.com/old",
+			ExecuteAt:      time.Now().Add(1 * time.Hour),
+			Headers:        map[string]string{"X-Old": "1"},
+			Payload:        map[string]any{"old": true},
+			Retries:        1,
+			RetryInterval:  1000,
+			Status:         scheduler.StatusPending,
+			// A task recovered from a crash is pending with attempts already
+			// logged; that history is not the client's to overwrite.
+			Attempts: []scheduler.Attempt{{N: 1, StatusCode: 500, Error: "unexpected status code: 500"}},
+		}
+	}
+
+	t.Run("replaces the client-owned fields", func(t *testing.T) {
+		store, handler := newHandler(pendingTask())
+		executeAt := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Second)
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":            "http://example.com/new",
+			"execute_at":     executeAt.Format(time.RFC3339),
+			"headers":        map[string]string{"X-New": "2"},
+			"payload":        map[string]any{"new": true},
+			"retries":        5,
+			"retry_interval": 7000,
+		}))
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+		var resp scheduler.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "task123", resp.ID)
+		assert.Equal(t, "http://example.com/new", resp.URL)
+		assert.True(t, executeAt.Equal(resp.ExecuteAt))
+		assert.Equal(t, map[string]string{"X-New": "2"}, resp.Headers)
+		assert.Equal(t, map[string]any{"new": true}, resp.Payload)
+		assert.Equal(t, 5, resp.Retries)
+		assert.Equal(t, 7000, resp.RetryInterval)
+
+		// Server-owned state survives untouched.
+		assert.Equal(t, scheduler.StatusPending, resp.Status)
+		assert.Equal(t, "key-123", resp.IdempotencyKey, "the creation-time key is not settable via PUT")
+		assert.Len(t, resp.Attempts, 1)
+		assert.Nil(t, resp.FinishedAt)
+
+		stored, err := store.GetTask("task123")
+		require.NoError(t, err)
+		assert.Equal(t, "http://example.com/new", stored.URL)
+		assert.Len(t, stored.Attempts, 1)
+	})
+
+	t.Run("omitted optional fields are reset", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var resp scheduler.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Nil(t, resp.Headers)
+		assert.Nil(t, resp.Payload)
+		assert.Equal(t, 0, resp.Retries)
+		assert.Equal(t, DEFAULT_RETRY_INTERVAL, resp.RetryInterval)
+	})
+
+	t.Run("rejects non-pending tasks", func(t *testing.T) {
+		for _, status := range []scheduler.TaskStatus{
+			scheduler.StatusRunning,
+			scheduler.StatusSucceeded,
+			scheduler.StatusFailed,
+			scheduler.StatusCancelled,
+		} {
+			t.Run(string(status), func(t *testing.T) {
+				task := pendingTask()
+				task.Status = status
+				_, handler := newHandler(task)
+
+				w := httptest.NewRecorder()
+				handler.UpdateTask(w, updateReq("task123", map[string]any{
+					"url":        "http://example.com/new",
+					"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+				}))
+
+				assert.Equal(t, http.StatusConflict, w.Code)
+			})
+		}
+	})
+
+	t.Run("task not found", func(t *testing.T) {
+		_, handler := newHandler()
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("nonexistent", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	t.Run("missing task id", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		req := httptest.NewRequest(http.MethodPut, "/tasks/", bytes.NewReader([]byte("{}")))
+		req.Header.Set("X-API-Key", "test-api-key")
+		w := httptest.NewRecorder()
+
+		handler.UpdateTask(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		req := httptest.NewRequest(http.MethodPut, "/tasks/task123", bytes.NewReader([]byte("invalid json")))
+		req.Header.Set("X-API-Key", "test-api-key")
+		req.SetPathValue("id", "task123")
+		w := httptest.NewRecorder()
+
+		handler.UpdateTask(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("invalid time format", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": "not-a-time",
+		}))
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("past execution time", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("missing url", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("store failure", func(t *testing.T) {
+		handler := New(&updateFailingStore{})
+		handler.APIKey = "test-api-key"
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+
+	t.Run("missing API key", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		req := updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		})
+		req.Header.Del("X-API-Key")
+		w := httptest.NewRecorder()
+
+		handler.WithAuth(handler.UpdateTask)(w, req)
 
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
@@ -655,6 +1008,17 @@ func (f *failingStore) ListTasks(status string) ([]scheduler.Task, error) {
 
 func (f *failingStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
 	return 0, nil
+}
+
+// updateFailingStore hands back a pending task but fails to persist the update.
+type updateFailingStore struct{ failingStore }
+
+func (s *updateFailingStore) GetTask(id string) (*scheduler.Task, error) {
+	return &scheduler.Task{ID: id, Status: scheduler.StatusPending}, nil
+}
+
+func (s *updateFailingStore) Update(task scheduler.Task) error {
+	return errors.New("database connection failed")
 }
 
 func TestReadyHandler(t *testing.T) {

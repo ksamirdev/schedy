@@ -28,6 +28,7 @@ const sidebars: SidebarsConfig = {
         'api/create',
         'api/list',
         'api/get',
+        'api/update',
         'api/cancel',
         'api/bulk-delete',
       ],

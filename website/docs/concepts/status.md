@@ -17,6 +17,11 @@ answer "did it run, how many tries, and why did it fail?".
 | `failed`    | Retries exhausted; last attempt non-2xx or error.  | Yes      |
 | `cancelled` | Cancelled via `DELETE /tasks/{id}` before running. | Yes      |
 
+`pending` is the only mutable state - see [Update a task](../api/update.md).
+Note that it does not mean "never fired": a task interrupted mid-delivery by a
+crash is re-queued as `pending` with its earlier attempts still logged, which is
+why an update never clears the attempt history.
+
 Terminal tasks are retained for history and auto-purged after
 `SCHEDY_HISTORY_TTL`. A completed task carries the full attempt log:
 

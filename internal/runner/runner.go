@@ -46,7 +46,6 @@ func (r *Runner) runOnce(start, end time.Time) {
 
 	for i, task := range tasks {
 		go func(t scheduler.Task, idx int) {
-			attempt := newAttempt(t.Retries, t.RetryInterval)
 			taskTime := time.Until(t.ExecuteAt)
 			if max(taskTime, 0) == 0 {
 				taskTime = 0
@@ -57,15 +56,32 @@ func (r *Runner) runOnce(start, end time.Time) {
 
 			<-timer.C()
 
-			// The task may have been cancelled after it was picked up but
-			// before its timer fired. Re-read its current state and skip if it
-			// is no longer pending, so cancel wins the race.
+			// The task may have been cancelled or updated after it was picked up
+			// but before its timer fired. Re-read its current state: a cancel
+			// (or any non-pending status) wins the race, a reschedule drops this
+			// run so the next tick picks the task up at its new time, and any
+			// other edit fires the fresh field values instead of the stale copy.
 			// ponytail: residual TOCTOU between this read and the Update below
 			// (single process, microsecond window); add a CAS status transition
 			// in the store if that window ever matters.
-			if cur, err := r.store.GetTask(t.ID); err != nil || cur == nil || cur.Status != scheduler.StatusPending {
+			cur, err := r.store.GetTask(t.ID)
+			if err != nil {
+				log.Printf("re-read task %s before firing: %v", t.ID, err)
 				return
 			}
+			// Cancelled or deleted mid-flight: expected, not an error.
+			if cur == nil || cur.Status != scheduler.StatusPending {
+				return
+			}
+			if !cur.ExecuteAt.Equal(t.ExecuteAt) {
+				log.Printf("Task %s rescheduled to %s, skipping this run", t.ID, cur.ExecuteAt.Format(time.RFC3339))
+				return
+			}
+			t = *cur
+
+			// Built from the re-read copy so an update to the retry settings
+			// takes effect on this run rather than the next one.
+			attempt := newAttempt(t.Retries, t.RetryInterval)
 
 			log.Printf("#%d | Executing task: %s", idx, t.ID)
 

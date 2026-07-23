@@ -28,13 +28,17 @@ type Attempt struct {
 }
 
 type Task struct {
-	ID            string            `json:"id"`
-	URL           string            `json:"url"`
-	ExecuteAt     time.Time         `json:"execute_at"`
-	Headers       map[string]string `json:"headers"` // Custom headers
-	Payload       any               `json:"payload"` // Flexible payload
-	Retries       int               `json:"retries"`
-	RetryInterval int               `json:"retry_interval"` // milliseconds
+	ID string `json:"id"`
+	// IdempotencyKey is the caller-supplied Idempotency-Key the Task was
+	// created with, if any. Set once at creation and never changed: it is the
+	// Task's identity to the caller, independent of what it is scheduled to do.
+	IdempotencyKey string            `json:"idempotency_key,omitempty"`
+	URL            string            `json:"url"`
+	ExecuteAt      time.Time         `json:"execute_at"`
+	Headers        map[string]string `json:"headers"` // Custom headers
+	Payload        any               `json:"payload"` // Flexible payload
+	Retries        int               `json:"retries"`
+	RetryInterval  int               `json:"retry_interval"` // milliseconds
 
 	Status     TaskStatus `json:"status"`
 	Attempts   []Attempt  `json:"attempts,omitempty"`
