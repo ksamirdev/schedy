@@ -3,6 +3,7 @@ package runner
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// httptest servers bind to loopback, which the executor's new SSRF guard blocks
+// by default. Opt out for the package so the runner can reach them.
+func TestMain(m *testing.M) {
+	os.Setenv("SCHEDY_ALLOW_PRIVATE_TARGETS", "1")
+	os.Exit(m.Run())
+}
 
 // fakeStore is a concurrency-safe in-memory Store. The runner reads it from a
 // worker goroutine while the test writes to it, which is the whole point of
