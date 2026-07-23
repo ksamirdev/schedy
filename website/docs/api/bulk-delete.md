@@ -1,7 +1,7 @@
 ---
 id: bulk-delete
 title: Bulk delete
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 # Bulk delete

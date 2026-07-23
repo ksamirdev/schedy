@@ -22,3 +22,6 @@ profile.cov
 
 data/
 dist/
+
+# Locally built binary (`go build -o schedy ./cmd/schedy`)
+/schedy

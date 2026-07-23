@@ -353,6 +353,224 @@ func TestGetTaskHandler(t *testing.T) {
 	})
 }
 
+func TestUpdateTaskHandler(t *testing.T) {
+	// Seeds go in directly rather than through Save, which forces pending.
+	newHandler := func(seed ...scheduler.Task) (*mockStore, *Handler) {
+		store := newMockStore()
+		for _, task := range seed {
+			store.tasks[task.ID] = task
+		}
+		handler := New(store)
+		handler.APIKey = "test-api-key"
+		return store, handler
+	}
+
+	updateReq := func(id string, body any) *http.Request {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPut, "/tasks/"+id, bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "test-api-key")
+		req.SetPathValue("id", id)
+		return req
+	}
+
+	pendingTask := func() scheduler.Task {
+		return scheduler.Task{
+			ID:            "task123",
+			URL:           "http://example.com/old",
+			ExecuteAt:     time.Now().Add(1 * time.Hour),
+			Headers:       map[string]string{"X-Old": "1"},
+			Payload:       map[string]any{"old": true},
+			Retries:       1,
+			RetryInterval: 1000,
+			Status:        scheduler.StatusPending,
+			// A task recovered from a crash is pending with attempts already
+			// logged; that history is not the client's to overwrite.
+			Attempts: []scheduler.Attempt{{N: 1, StatusCode: 500, Error: "unexpected status code: 500"}},
+		}
+	}
+
+	t.Run("replaces the client-owned fields", func(t *testing.T) {
+		store, handler := newHandler(pendingTask())
+		executeAt := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Second)
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":            "http://example.com/new",
+			"execute_at":     executeAt.Format(time.RFC3339),
+			"headers":        map[string]string{"X-New": "2"},
+			"payload":        map[string]any{"new": true},
+			"retries":        5,
+			"retry_interval": 7000,
+		}))
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+		var resp scheduler.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "task123", resp.ID)
+		assert.Equal(t, "http://example.com/new", resp.URL)
+		assert.True(t, executeAt.Equal(resp.ExecuteAt))
+		assert.Equal(t, map[string]string{"X-New": "2"}, resp.Headers)
+		assert.Equal(t, map[string]any{"new": true}, resp.Payload)
+		assert.Equal(t, 5, resp.Retries)
+		assert.Equal(t, 7000, resp.RetryInterval)
+
+		// Server-owned state survives untouched.
+		assert.Equal(t, scheduler.StatusPending, resp.Status)
+		assert.Len(t, resp.Attempts, 1)
+		assert.Nil(t, resp.FinishedAt)
+
+		stored, err := store.GetTask("task123")
+		require.NoError(t, err)
+		assert.Equal(t, "http://example.com/new", stored.URL)
+		assert.Len(t, stored.Attempts, 1)
+	})
+
+	t.Run("omitted optional fields are reset", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var resp scheduler.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Nil(t, resp.Headers)
+		assert.Nil(t, resp.Payload)
+		assert.Equal(t, 0, resp.Retries)
+		assert.Equal(t, DEFAULT_RETRY_INTERVAL, resp.RetryInterval)
+	})
+
+	t.Run("rejects non-pending tasks", func(t *testing.T) {
+		for _, status := range []scheduler.TaskStatus{
+			scheduler.StatusRunning,
+			scheduler.StatusSucceeded,
+			scheduler.StatusFailed,
+			scheduler.StatusCancelled,
+		} {
+			t.Run(string(status), func(t *testing.T) {
+				task := pendingTask()
+				task.Status = status
+				_, handler := newHandler(task)
+
+				w := httptest.NewRecorder()
+				handler.UpdateTask(w, updateReq("task123", map[string]any{
+					"url":        "http://example.com/new",
+					"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+				}))
+
+				assert.Equal(t, http.StatusConflict, w.Code)
+			})
+		}
+	})
+
+	t.Run("task not found", func(t *testing.T) {
+		_, handler := newHandler()
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("nonexistent", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	t.Run("missing task id", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		req := httptest.NewRequest(http.MethodPut, "/tasks/", bytes.NewReader([]byte("{}")))
+		req.Header.Set("X-API-Key", "test-api-key")
+		w := httptest.NewRecorder()
+
+		handler.UpdateTask(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		req := httptest.NewRequest(http.MethodPut, "/tasks/task123", bytes.NewReader([]byte("invalid json")))
+		req.Header.Set("X-API-Key", "test-api-key")
+		req.SetPathValue("id", "task123")
+		w := httptest.NewRecorder()
+
+		handler.UpdateTask(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("invalid time format", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": "not-a-time",
+		}))
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("past execution time", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("missing url", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("store failure", func(t *testing.T) {
+		handler := New(&updateFailingStore{})
+		handler.APIKey = "test-api-key"
+
+		w := httptest.NewRecorder()
+		handler.UpdateTask(w, updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		}))
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+
+	t.Run("missing API key", func(t *testing.T) {
+		_, handler := newHandler(pendingTask())
+
+		req := updateReq("task123", map[string]any{
+			"url":        "http://example.com/new",
+			"execute_at": time.Now().Add(3 * time.Hour).Format(time.RFC3339),
+		})
+		req.Header.Del("X-API-Key")
+		w := httptest.NewRecorder()
+
+		handler.WithAuth(handler.UpdateTask)(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+}
+
 func TestDeleteTaskHandler(t *testing.T) {
 	store := newMockStore()
 	handler := New(store)
@@ -655,6 +873,17 @@ func (f *failingStore) ListTasks(status string) ([]scheduler.Task, error) {
 
 func (f *failingStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
 	return 0, nil
+}
+
+// updateFailingStore hands back a pending task but fails to persist the update.
+type updateFailingStore struct{ failingStore }
+
+func (s *updateFailingStore) GetTask(id string) (*scheduler.Task, error) {
+	return &scheduler.Task{ID: id, Status: scheduler.StatusPending}, nil
+}
+
+func (s *updateFailingStore) Update(task scheduler.Task) error {
+	return errors.New("database connection failed")
 }
 
 func TestReadyHandler(t *testing.T) {

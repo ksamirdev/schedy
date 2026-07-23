@@ -49,6 +49,7 @@ func main() {
 	mux.HandleFunc("POST /tasks", handler.WithAuth(handler.CreateTask))
 	mux.HandleFunc("GET /tasks", handler.WithAuth(handler.ListTasks))
 	mux.HandleFunc("GET /tasks/{id}", handler.WithAuth(handler.GetTask))
+	mux.HandleFunc("PUT /tasks/{id}", handler.WithAuth(handler.UpdateTask))
 	mux.HandleFunc("DELETE /tasks/{id}", handler.WithAuth(handler.DeleteTask))
 	mux.HandleFunc("DELETE /tasks", handler.WithAuth(handler.DeleteTasks))
 

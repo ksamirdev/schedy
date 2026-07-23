@@ -42,34 +42,72 @@ func (h *Handler) WithAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		URL           string            `json:"url"`
-		Headers       map[string]string `json:"headers"`
-		Payload       any               `json:"payload"`
-		ExecuteAt     string            `json:"execute_at"` // RFC3339
-		Retries       int               `json:"retries"`
-		RetryInterval *int              `json:"retry_interval"` // milliseconds
-	}
+// taskRequest is the client-owned shape of a task, shared by create and update.
+// Server-owned state (id, status, attempts, finished_at) is deliberately absent.
+type taskRequest struct {
+	URL           string            `json:"url"`
+	Headers       map[string]string `json:"headers"`
+	Payload       any               `json:"payload"`
+	ExecuteAt     string            `json:"execute_at"` // RFC3339
+	Retries       int               `json:"retries"`
+	RetryInterval *int              `json:"retry_interval"` // milliseconds
+}
+
+// decodeTaskRequest reads and validates a task body, applying defaults for the
+// optional fields. It writes the error response itself; the bool reports
+// whether the caller may continue.
+func decodeTaskRequest(w http.ResponseWriter, r *http.Request) (taskRequest, time.Time, bool) {
+	var req taskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
-		return
+		return req, time.Time{}, false
+	}
+	if req.URL == "" {
+		http.Error(w, "url is required", http.StatusBadRequest)
+		return req, time.Time{}, false
 	}
 	t, err := time.Parse(time.RFC3339, req.ExecuteAt)
 	if err != nil {
 		http.Error(w, "invalid time (ISO required)", http.StatusBadRequest)
-		return
+		return req, time.Time{}, false
 	}
-
-	now := time.Now().UTC()
-	if t.UTC().Before(now) {
+	if t.UTC().Before(time.Now().UTC()) {
 		http.Error(w, "time cannot be in past", http.StatusBadRequest)
-		return
+		return req, time.Time{}, false
 	}
-
 	if req.RetryInterval == nil {
 		req.RetryInterval = new(int)
 		*req.RetryInterval = DEFAULT_RETRY_INTERVAL
+	}
+	return req, t, true
+}
+
+// loadTask resolves the {id} path value to a stored task. It writes the error
+// response itself; the bool reports whether the caller may continue.
+func (h *Handler) loadTask(w http.ResponseWriter, r *http.Request) (*scheduler.Task, bool) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "missing task id", http.StatusBadRequest)
+		return nil, false
+	}
+
+	task, err := h.Store.GetTask(id)
+	if err != nil {
+		http.Error(w, "could not get task", http.StatusInternalServerError)
+		return nil, false
+	}
+	if task == nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return nil, false
+	}
+	return task, true
+}
+
+// CreateTask schedules a new task for a future time.
+func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
+	req, t, ok := decodeTaskRequest(w, r)
+	if !ok {
+		return
 	}
 
 	// Idempotency: Check for existing task with same URL and execute_at
@@ -106,7 +144,45 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(task)
+}
+
+// UpdateTask replaces a pending task's client-owned fields, keeping its id.
+// Only pending tasks are mutable; anything else is a conflict.
+func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
+	req, execAt, ok := decodeTaskRequest(w, r)
+	if !ok {
+		return
+	}
+
+	task, ok := h.loadTask(w, r)
+	if !ok {
+		return
+	}
+	if task.Status != scheduler.StatusPending {
+		http.Error(w, "only pending tasks can be updated", http.StatusConflict)
+		return
+	}
+
+	// Full replace, but of the client-owned fields only. Status, attempts and
+	// finished_at stay put: a task re-queued after a crash is pending with
+	// attempts already logged, and that delivery record is not the client's to
+	// overwrite.
+	task.URL = req.URL
+	task.Headers = req.Headers
+	task.Payload = req.Payload
+	task.ExecuteAt = execAt
+	task.Retries = req.Retries
+	task.RetryInterval = *req.RetryInterval
+
+	if err := h.Store.Update(*task); err != nil {
+		http.Error(w, "could not update task", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(task)
 }
 
@@ -124,19 +200,8 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 
 // GetTask returns a single task by ID
 func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "missing task id", http.StatusBadRequest)
-		return
-	}
-
-	task, err := h.Store.GetTask(id)
-	if err != nil {
-		http.Error(w, "could not get task", http.StatusInternalServerError)
-		return
-	}
-	if task == nil {
-		http.Error(w, "task not found", http.StatusNotFound)
+	task, ok := h.loadTask(w, r)
+	if !ok {
 		return
 	}
 
@@ -148,19 +213,8 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
 // (marked cancelled and retained in history); already-terminal tasks are a no-op
 // and expire on their own via TTL.
 func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "missing task id", http.StatusBadRequest)
-		return
-	}
-
-	task, err := h.Store.GetTask(id)
-	if err != nil {
-		http.Error(w, "could not get task", http.StatusInternalServerError)
-		return
-	}
-	if task == nil {
-		http.Error(w, "task not found", http.StatusNotFound)
+	task, ok := h.loadTask(w, r)
+	if !ok {
 		return
 	}
 

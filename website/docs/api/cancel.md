@@ -1,7 +1,7 @@
 ---
 id: cancel
 title: Cancel a task
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 # Cancel a task
