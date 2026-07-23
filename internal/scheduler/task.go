@@ -18,6 +18,22 @@ func (s TaskStatus) IsTerminal() bool {
 	return s == StatusSucceeded || s == StatusFailed || s == StatusCancelled
 }
 
+// RetryMode selects how the delay between retries is computed.
+type RetryMode string
+
+const (
+	// RetryFixed waits retry_interval between every attempt.
+	RetryFixed RetryMode = "fixed"
+	// RetryExponential waits min(retry_interval * 2^n, cap) with full jitter,
+	// backing off from a struggling endpoint instead of hammering it.
+	RetryExponential RetryMode = "exponential"
+)
+
+// Valid reports whether m is a recognised retry mode.
+func (m RetryMode) Valid() bool {
+	return m == RetryFixed || m == RetryExponential
+}
+
 // Attempt records one HTTP POST fired at the Task's url.
 type Attempt struct {
 	N          int       `json:"n"`               // 1-based attempt number
@@ -43,7 +59,8 @@ type Task struct {
 	Headers        map[string]string `json:"headers"` // Custom headers
 	Payload        any               `json:"payload"` // Flexible payload
 	Retries        int               `json:"retries"`
-	RetryInterval  int               `json:"retry_interval"` // milliseconds
+	RetryInterval  int               `json:"retry_interval"` // milliseconds, base delay between retries
+	RetryMode      RetryMode         `json:"retry_mode"`     // fixed (default) or exponential
 
 	Status     TaskStatus `json:"status"`
 	Attempts   []Attempt  `json:"attempts,omitempty"`

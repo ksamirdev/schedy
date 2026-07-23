@@ -47,6 +47,7 @@ Identical to [create](./create.md).
 | `payload`        | any    | Optional body: JSON object, string, or form data. Omitted = cleared.|
 | `retries`        | int    | Optional number of retries. Omitted = `0`.                         |
 | `retry_interval` | int    | Optional ms between retries. Omitted = `2000`.                     |
+| `retry_mode`     | string | Optional retry timing: `fixed` (default) or `exponential`. Omitted = `fixed`. See [Retries](../concepts/retries.md). |
 
 Unlike create, `PUT` never deduplicates and ignores `Idempotency-Key` - the id
 in the path already says which task you mean.
