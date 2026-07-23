@@ -11,6 +11,7 @@ The port is set with the `--port` flag (default `8080`). Behavior is tuned with 
 | `SCHEDY_HISTORY_TTL`           | `72h`   | How long terminal tasks are retained before purge (Go duration, e.g. `24h`, `168h`).                                                                                                                                         |
 | `SCHEDY_ALLOW_PRIVATE_TARGETS` | _unset_ | If set, allow task URLs that resolve to private/loopback/link-local addresses. Off by default: such targets are rejected at dial time to prevent SSRF into the host's network. See [Delivery](/concepts/delivery#blocked-targets). |
 | `SCHEDY_ON_FAILURE_URL`        | _unset_ | If set, a task that exhausts its retries POSTs `{id, status, attempts, last_error, status_code}` here once, best-effort. See [Retries](/concepts/retries#failure-callback). |
+| `SCHEDY_SIGNING_SECRET`        | _unset_ | If set, every outgoing request is signed with an `X-Schedy-Signature` HMAC so receivers can authenticate it. See [Delivery](/concepts/delivery#signed-requests). |
 
 Example:
 

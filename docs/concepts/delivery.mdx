@@ -13,6 +13,48 @@ Attempts are retried, and on restart any task left mid-run is re-queued rather t
 
 Tasks that came due while the server was down are caught up on the next scan rather than skipped.
 
+## Signed requests
+
+Set `SCHEDY_SIGNING_SECRET` and Schedy signs every outgoing request so your receiver can verify it genuinely came from Schedy, and not from anyone who happened to learn the URL.
+
+Two headers are attached:
+
+| Header               | Value                                                          |
+| -------------------- | -------------------------------------------------------------- |
+| `X-Schedy-Timestamp` | Unix seconds when the request was signed.                      |
+| `X-Schedy-Signature` | `sha256=<hex>`, an HMAC-SHA256 of `<timestamp>.<raw-body>` keyed with your secret. |
+
+The signature covers `timestamp.body` rather than the body alone, so a captured request cannot be replayed indefinitely: reject anything whose timestamp is outside a small freshness window (a few minutes) and each request is usable only briefly.
+
+To verify, recompute the HMAC over the timestamp, a literal `.`, and the **raw** request body (before any JSON parsing), then compare in constant time:
+
+```js
+import crypto from "node:crypto";
+
+// express.raw({ type: "*/*" }) so `req.body` is the exact bytes Schedy signed.
+function verifySchedy(req, secret, toleranceSec = 300) {
+  const ts = req.get("X-Schedy-Timestamp");
+  const sig = req.get("X-Schedy-Signature") || "";
+  if (!ts || Math.abs(Date.now() / 1000 - Number(ts)) > toleranceSec) return false;
+
+  const expected =
+    "sha256=" +
+    crypto.createHmac("sha256", secret).update(`${ts}.${req.body}`).digest("hex");
+
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+```
+
+<Note>
+  `GET` and `HEAD` deliveries carry no body, so they are signed over `<timestamp>.` (an empty body). The timestamp still authenticates the request and bounds replays.
+</Note>
+
+<Warning>
+  A single global secret is used for every task. There are no per-task secrets or rotation yet - rotating the secret invalidates in-flight signatures until receivers are updated.
+</Warning>
+
 ## Blocked targets
 
 So Schedy cannot be turned into an SSRF proxy into its host's network, task URLs that resolve to private, loopback, link-local (including the `169.254.169.254` cloud-metadata endpoint), or unspecified addresses are rejected at dial time. The check runs on the resolved IP, so a public DNS name that points at one of those ranges is blocked too.

@@ -1,6 +1,9 @@
 package executor
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -75,6 +78,61 @@ func TestExecuteCapturesFailedBody(t *testing.T) {
 		res := NewExecutor().Execute(scheduler.Task{URL: srv.URL})
 		if res.Err != nil || res.ResponseBody != "" {
 			t.Errorf("err=%v body=%q", res.Err, res.ResponseBody)
+		}
+	})
+}
+
+// Verifies the HMAC signature headers: present and correct when a secret is
+// set (signed over "<timestamp>.<body>"), absent when it is not.
+func TestExecuteSignsRequest(t *testing.T) {
+	const secret = "topsecret"
+
+	capture := func() (*httptest.Server, *http.Header, *[]byte) {
+		hdr := &http.Header{}
+		var gotBody []byte
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*hdr = r.Header.Clone()
+			gotBody, _ = io.ReadAll(r.Body)
+		}))
+		return srv, hdr, &gotBody
+	}
+
+	t.Run("signs over timestamp.body when a secret is set", func(t *testing.T) {
+		srv, hdr, gotBody := capture()
+		defer srv.Close()
+
+		e := NewExecutor()
+		e.signingSecret = secret
+		res := e.Execute(scheduler.Task{URL: srv.URL, Payload: map[string]string{"hello": "world"}})
+		if res.Err != nil {
+			t.Fatalf("unexpected err: %v", res.Err)
+		}
+
+		ts := hdr.Get("X-Schedy-Timestamp")
+		if ts == "" {
+			t.Fatal("missing X-Schedy-Timestamp")
+		}
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(ts + "." + string(*gotBody)))
+		want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+		if got := hdr.Get("X-Schedy-Signature"); got != want {
+			t.Errorf("signature=%q want %q", got, want)
+		}
+	})
+
+	t.Run("no signature headers without a secret", func(t *testing.T) {
+		srv, hdr, _ := capture()
+		defer srv.Close()
+
+		res := NewExecutor().Execute(scheduler.Task{URL: srv.URL, Payload: "hi"})
+		if res.Err != nil {
+			t.Fatalf("unexpected err: %v", res.Err)
+		}
+		if sig := hdr.Get("X-Schedy-Signature"); sig != "" {
+			t.Errorf("unexpected signature %q", sig)
+		}
+		if ts := hdr.Get("X-Schedy-Timestamp"); ts != "" {
+			t.Errorf("unexpected timestamp %q", ts)
 		}
 	})
 }
