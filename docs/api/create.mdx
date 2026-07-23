@@ -21,6 +21,29 @@ Schedule an HTTP request for a future time.
 | `retries`        | int    | Optional number of retries.                                                                                                                     |
 | `retry_interval` | int    | Optional ms between retries (default `2000`).                                                                                                    |
 | `retry_mode`     | string | Optional retry timing: `fixed` (default) or `exponential` (backoff + jitter). See [Retries](/concepts/retries).                                  |
+| `schedule`       | string | Optional recurrence interval as a Go duration (`"15m"`, `"2h"`). After each fire, a fresh one-shot task is enqueued at `fire_time + schedule`. See [Recurrence](#recurrence).                                  |
+
+## Recurrence
+
+Set `schedule` to an interval and the task becomes recurring: each time it fires, Schedy enqueues a fresh one-shot task at `fire_time + schedule`.
+The interval is a [Go duration](https://pkg.go.dev/time#ParseDuration) - `"30s"`, `"15m"`, `"2h"` - and must be positive.
+
+```bash
+curl -X POST http://localhost:8080/tasks \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-secret" \
+  -d '{
+    "execute_at": "2030-05-26T15:00:00Z",
+    "url": "https://example.com/heartbeat",
+    "schedule": "15m"
+  }'
+```
+
+To stop a recurring task, [cancel](/api/cancel) the current pending task - the chain stops because no successor is enqueued.
+
+<Note>
+  This is **interval-only recurrence, deliberately not cron.** There is no cron syntax, no timezones, no DST handling, and no catch-up for missed fires - the next fire is always measured forward from the moment the task actually ran. If you need calendar scheduling, run cron on your side and POST one-shot tasks.
+</Note>
 
 ## Example
 

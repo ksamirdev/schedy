@@ -176,6 +176,66 @@ func TestFailureCallback(t *testing.T) {
 	})
 }
 
+// A task with a Schedule re-enqueues a fresh one-shot at fire_time+interval
+// after it fires; a task without one does not. Cancelling stops the chain,
+// which the "cancel wins the race" case already covers (a cancelled task never
+// fires, so it never reschedules).
+func TestRecurringReschedule(t *testing.T) {
+	t.Run("recurring task enqueues the next fire", func(t *testing.T) {
+		srv, hits := hitRecorder(t)
+
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "rec1",
+			URL:       srv.URL + "/ping",
+			ExecuteAt: time.Now().Add(100 * time.Millisecond),
+			Status:    scheduler.StatusPending,
+			Schedule:  "1h", // far enough out that the successor won't fire mid-test
+		}))
+
+		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second}
+		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		<-hits // original delivered
+
+		// The successor is a fresh, distinct, pending one-shot carrying the schedule.
+		require.Eventually(t, func() bool {
+			pending, _ := store.ListTasks(string(scheduler.StatusPending))
+			return len(pending) == 1
+		}, 2*time.Second, 20*time.Millisecond)
+
+		pending, _ := store.ListTasks(string(scheduler.StatusPending))
+		next := pending[0]
+		assert.NotEqual(t, "rec1", next.ID, "recurrence is a new task, not a mutation")
+		assert.Equal(t, "1h", next.Schedule, "the chain carries the schedule forward")
+		assert.Empty(t, next.Attempts, "the successor starts clean")
+		assert.True(t, next.ExecuteAt.After(time.Now().Add(30*time.Minute)), "next fires ~1h out")
+	})
+
+	t.Run("non-recurring task does not re-enqueue", func(t *testing.T) {
+		srv, hits := hitRecorder(t)
+
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "once1",
+			URL:       srv.URL + "/ping",
+			ExecuteAt: time.Now().Add(100 * time.Millisecond),
+			Status:    scheduler.StatusPending,
+		}))
+
+		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second}
+		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		<-hits
+
+		require.Eventually(t, func() bool {
+			got, _ := store.GetTask("once1")
+			return got != nil && got.Status == scheduler.StatusSucceeded
+		}, 2*time.Second, 20*time.Millisecond)
+
+		all, _ := store.ListTasks("")
+		assert.Len(t, all, 1, "a one-shot leaves no successor")
+	})
+}
+
 // The runner pre-fetches everything due in the next interval and holds an
 // in-memory copy until each task's timer fires. These tests cover what happens
 // when the task is edited inside that window.
