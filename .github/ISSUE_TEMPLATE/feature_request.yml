@@ -1,0 +1,45 @@
+name: Feature Request
+description: Suggest an idea or improvement for schedy
+title: "[Feature]: "
+labels: ["enhancement"]
+assignees: ["ksamirdev"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! schedy stays deliberately small - one HTTP request, fired later - so the strongest requests explain the real problem, not just the feature. Please search existing issues first.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What are you trying to do, and what's getting in the way?
+      placeholder: I want to ... but today schedy ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: Why does this matter? What's the impact or motivation behind the request?
+      placeholder: This would let me ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-needs-to-change
+    attributes:
+      label: What needs to change
+      description: The solution or change you're proposing - what should be added, removed, or updated.
+      placeholder: Add a ... / change ... so that ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, or other approaches you weighed.
+    validations:
+      required: false
