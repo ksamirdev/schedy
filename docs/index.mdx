@@ -1,0 +1,47 @@
+---
+title: "Introduction"
+description: "Schedy is a self-hostable, ultra-lightweight HTTP task scheduler - fire HTTP requests to any endpoint at any time, with headers, payloads, retries, and full status tracking."
+---
+
+Schedy schedules an HTTP request to any endpoint at any time - with headers, payloads, retries, and full status tracking.
+
+It is a single Go binary with an embedded [BadgerDB](https://github.com/dgraph-io/badger) store. No external database, no message queue, no cron files. You talk to it over a small HTTP API, it fires your requests when they are due, and it keeps a record of what happened.
+
+## Quick start
+
+Run the server:
+
+```bash
+docker run -p 8080:8080 ghcr.io/ksamirdev/schedy:latest
+```
+
+Schedule a task:
+
+```bash
+curl -X POST http://localhost:8080/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "execute_at": "2030-05-26T15:00:00Z",
+    "url": "https://example.com/webhook",
+    "payload": {"hello": "world"}
+  }'
+```
+
+That's it - Schedy will `POST` your payload to the URL at the scheduled time and record the outcome.
+
+## Explore
+
+<CardGroup cols={2}>
+  <Card title="Install & Run" icon="download" href="/installation">
+    Docker, prebuilt binaries, Kubernetes, or build from source.
+  </Card>
+  <Card title="Status & History" icon="clock-rotate-left" href="/concepts/status">
+    How every task reports what happened, attempt by attempt.
+  </Card>
+  <Card title="Retries" icon="rotate" href="/concepts/retries">
+    Fixed or exponential backoff with full jitter.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/create">
+    Every endpoint, field, and response code.
+  </Card>
+</CardGroup>

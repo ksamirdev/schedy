@@ -5,7 +5,7 @@
 Schedy schedules HTTP POST requests to any endpoint, at any time, with custom headers and payloads.
 Perfect for webhooks, bots, reminders, and integrations - without the bloat.
 
-📖 **Full documentation: [ksamirdev.github.io/schedy](https://ksamirdev.github.io/schedy)**
+📖 **Full documentation: [schedy.mintlify.site](https://schedy.mintlify.site)**
 
 ## Features
 
@@ -44,7 +44,7 @@ curl -X POST http://localhost:8080/tasks \
 ```
 
 That's the gist. Retries, status tracking, history, filtering, bulk delete, and the
-full API reference live in the **[docs](https://ksamirdev.github.io/schedy)**.
+full API reference live in the **[docs](https://schedy.mintlify.site)**.
 
 ## Build from source
 

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Schedy",
+  "description": "A self-hostable, ultra-lightweight HTTP task scheduler. Schedule HTTP requests to any endpoint at any time, with headers, payloads, retries, and full status tracking.",
+  "colors": {
+    "primary": "#6366F1",
+    "light": "#818CF8",
+    "dark": "#4F46E5"
+  },
+  "favicon": "/favicon.ico",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "index",
+              "installation",
+              "configuration",
+              "authentication"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/status",
+              "concepts/retries",
+              "concepts/delivery",
+              "concepts/idempotency"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Tasks",
+            "pages": [
+              "api/create",
+              "api/list",
+              "api/get",
+              "api/update",
+              "api/cancel",
+              "api/bulk-delete"
+            ]
+          },
+          {
+            "group": "System",
+            "pages": [
+              "api/health"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/ksamirdev/schedy"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Get Started",
+      "href": "https://schedy.mintlify.site/installation"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/ksamirdev/schedy"
+    }
+  }
+}

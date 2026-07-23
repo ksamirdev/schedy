@@ -1,29 +1,21 @@
 ---
-id: status
-title: Status & History
-sidebar_position: 1
+title: "Status & History"
+description: "Every task carries a lifecycle status and a per-attempt log, so you can always answer: did it run, how many tries, and why did it fail?"
 ---
 
-# Task Status & History
-
-Every task carries a lifecycle `status` and a per-attempt log, so you can always
-answer "did it run, how many tries, and why did it fail?".
+Every task carries a lifecycle `status` and a per-attempt log, so you can always answer "did it run, how many tries, and why did it fail?".
 
 | Status      | Meaning                                            | Terminal |
-|-------------|----------------------------------------------------|----------|
+| ----------- | -------------------------------------------------- | -------- |
 | `pending`   | Accepted, no attempt started yet.                  | No       |
 | `running`   | At least one attempt fired, not yet terminal.      | No       |
 | `succeeded` | An attempt got a 2xx response.                     | Yes      |
 | `failed`    | Retries exhausted; last attempt non-2xx or error.  | Yes      |
 | `cancelled` | Cancelled via `DELETE /tasks/{id}` before running. | Yes      |
 
-`pending` is the only mutable state - see [Update a task](../api/update.md).
-Note that it does not mean "never fired": a task interrupted mid-delivery by a
-crash is re-queued as `pending` with its earlier attempts still logged, which is
-why an update never clears the attempt history.
+`pending` is the only mutable state - see [Update a task](/api/update). Note that it does not mean "never fired": a task interrupted mid-delivery by a crash is re-queued as `pending` with its earlier attempts still logged, which is why an update never clears the attempt history.
 
-Terminal tasks are retained for history and auto-purged after
-`SCHEDY_HISTORY_TTL`. A completed task carries the full attempt log:
+Terminal tasks are retained for history and auto-purged after `SCHEDY_HISTORY_TTL`. A completed task carries the full attempt log:
 
 ```json
 {

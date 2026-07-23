@@ -1,10 +1,7 @@
 ---
-id: health
-title: Health checks
-sidebar_position: 7
+title: "Health checks"
+description: "GET /healthz and /readyz - liveness and readiness probes for Kubernetes and container orchestration. No authentication required."
 ---
-
-# Health checks
 
 Schedy provides two health endpoints for Kubernetes and container orchestration platforms. Both endpoints require **no authentication**.
 
@@ -29,7 +26,7 @@ This endpoint always responds successfully as long as the process is running. No
 GET /readyz
 ```
 
-Returns `200 OK` if schedy is ready to accept new tasks. Returns `503 Service Unavailable` if the database is unreachable. Used by Kubernetes `readinessProbe` to determine if the pod should receive traffic.
+Returns `200 OK` if Schedy is ready to accept new tasks. Returns `503 Service Unavailable` if the database is unreachable. Used by Kubernetes `readinessProbe` to determine if the pod should receive traffic.
 
 ```bash
 curl http://localhost:8080/readyz

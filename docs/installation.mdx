@@ -1,10 +1,7 @@
 ---
-id: installation
-title: Install & Run
-sidebar_position: 2
+title: "Install & Run"
+description: "Run Schedy with Docker, a prebuilt binary, on Kubernetes, or build it from source."
 ---
-
-# Install & Run
 
 ## Docker
 
@@ -20,8 +17,7 @@ docker run -p 8080:8080 ghcr.io/ksamirdev/schedy:v0.1.0
 
 ## Binary
 
-Grab a prebuilt binary from the [Releases](https://github.com/ksamirdev/schedy/releases)
-page, or build from source:
+Grab a prebuilt binary from the [Releases](https://github.com/ksamirdev/schedy/releases) page, or build from source:
 
 ```bash
 go build -o schedy ./cmd/schedy
@@ -32,7 +28,7 @@ Requires Go 1.23+.
 
 ## Kubernetes
 
-Deploy schedy on Kubernetes with health probes:
+Deploy Schedy on Kubernetes with health probes:
 
 ```yaml
 apiVersion: apps/v1
@@ -81,9 +77,8 @@ spec:
           claimName: schedy-data
 ```
 
-For more details on health probes, see [Health checks](./api/health.md).
+For more details on health probes, see [Health checks](/api/health).
 
 ## Persistence
 
-Data persists to the `data/` directory (BadgerDB), so tasks survive restarts.
-Back it up to preserve scheduled work.
+Data persists to the `data/` directory (BadgerDB), so tasks survive restarts. Back it up to preserve scheduled work.
