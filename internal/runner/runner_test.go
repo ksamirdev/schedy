@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -105,6 +106,74 @@ func hitRecorder(t *testing.T) (*httptest.Server, chan string) {
 	}))
 	t.Cleanup(srv.Close)
 	return srv, hits
+}
+
+// A task that exhausts its retries fires a best-effort callback to
+// SCHEDY_ON_FAILURE_URL; a task that succeeds fires nothing.
+func TestFailureCallback(t *testing.T) {
+	t.Run("fires once on failed with the terminal details", func(t *testing.T) {
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(target.Close)
+
+		got := make(chan map[string]any, 4)
+		hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var b map[string]any
+			json.NewDecoder(r.Body).Decode(&b)
+			got <- b
+		}))
+		t.Cleanup(hook.Close)
+
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "f1",
+			URL:       target.URL,
+			ExecuteAt: time.Now().Add(150 * time.Millisecond),
+			Status:    scheduler.StatusPending,
+		}))
+
+		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second, onFailureURL: hook.URL}
+		r.runOnce(time.Now(), time.Now().Add(time.Second))
+
+		select {
+		case b := <-got:
+			assert.Equal(t, "f1", b["id"])
+			assert.Equal(t, "failed", b["status"])
+			assert.Equal(t, float64(500), b["status_code"])
+			assert.Equal(t, float64(1), b["attempts"])
+		case <-time.After(2 * time.Second):
+			t.Fatal("no failure callback fired")
+		}
+	})
+
+	t.Run("silent on success", func(t *testing.T) {
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		t.Cleanup(target.Close)
+
+		fired := make(chan struct{}, 1)
+		hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fired <- struct{}{}
+		}))
+		t.Cleanup(hook.Close)
+
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "s1",
+			URL:       target.URL,
+			ExecuteAt: time.Now().Add(150 * time.Millisecond),
+			Status:    scheduler.StatusPending,
+		}))
+
+		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second, onFailureURL: hook.URL}
+		r.runOnce(time.Now(), time.Now().Add(time.Second))
+
+		select {
+		case <-fired:
+			t.Fatal("callback fired on a successful task")
+		case <-time.After(600 * time.Millisecond):
+		}
+	})
 }
 
 // The runner pre-fetches everything due in the next interval and holds an

@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"log"
+	"net/http"
+	"os"
 	"time"
 
 	"github.com/ksamirdev/schedy/internal/executor"
@@ -14,14 +16,18 @@ type Runner struct {
 	store    scheduler.Store
 	executor *executor.Executor
 	interval time.Duration
+	// onFailureURL, if set (SCHEDY_ON_FAILURE_URL), receives a best-effort POST
+	// whenever a task exhausts its retries and reaches the failed state.
+	onFailureURL string
 }
 
 func New(store scheduler.Store, executor *executor.Executor, interval time.Duration) *Runner {
 	return &Runner{
-		ticker:   NewTicker(interval),
-		store:    store,
-		executor: executor,
-		interval: interval,
+		ticker:       NewTicker(interval),
+		store:        store,
+		executor:     executor,
+		interval:     interval,
+		onFailureURL: os.Getenv("SCHEDY_ON_FAILURE_URL"),
 	}
 }
 
@@ -124,6 +130,35 @@ func (r *Runner) runOnce(start, end time.Time) {
 			if err := r.store.Update(t); err != nil {
 				log.Printf("finalize %s (%s): %v", t.ID, t.Status, err)
 			}
+
+			if t.Status == scheduler.StatusFailed {
+				r.notifyFailure(t)
+			}
 		}(task, i)
+	}
+}
+
+// notifyFailure fires a single best-effort POST to SCHEDY_ON_FAILURE_URL when a
+// task exhausts its retries, so a permanent failure is not silent. Fire-and-
+// forget: the callback is never retried, and a failing callback never triggers
+// a callback about itself.
+func (r *Runner) notifyFailure(t scheduler.Task) {
+	if r.onFailureURL == "" || len(t.Attempts) == 0 {
+		return
+	}
+	last := t.Attempts[len(t.Attempts)-1]
+	res := r.executor.Execute(scheduler.Task{
+		URL:    r.onFailureURL,
+		Method: http.MethodPost,
+		Payload: map[string]any{
+			"id":          t.ID,
+			"status":      t.Status,
+			"attempts":    len(t.Attempts),
+			"last_error":  last.Error,
+			"status_code": last.StatusCode,
+		},
+	})
+	if res.Err != nil {
+		log.Printf("failure callback for %s: %v", t.ID, res.Err)
 	}
 }
