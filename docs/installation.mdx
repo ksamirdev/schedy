@@ -12,7 +12,7 @@ docker run -p 8080:8080 ghcr.io/ksamirdev/schedy:latest
 Also available on Docker Hub as `ksamirdev/schedy`, and pinned to a version tag:
 
 ```bash
-docker run -p 8080:8080 ghcr.io/ksamirdev/schedy:v0.1.0
+docker run -p 8080:8080 ghcr.io/ksamirdev/schedy:v1.0.0
 ```
 
 To keep your tasks across restarts, mount a volume at `/data` (where Schedy stores its database):
@@ -29,7 +29,7 @@ For a persistent, self-restarting deployment, use Compose. Save this as `docker-
 services:
   schedy:
     image: ghcr.io/ksamirdev/schedy:latest
-    # Pin a release tag for production, e.g. ghcr.io/ksamirdev/schedy:v0.1.0
+    # Pin a release tag for production, e.g. ghcr.io/ksamirdev/schedy:v1.0.0
     ports:
       - "8080:8080"
     environment:
@@ -101,7 +101,7 @@ spec:
     spec:
       containers:
       - name: schedy
-        image: ghcr.io/ksamirdev/schedy:v0.1.0
+        image: ghcr.io/ksamirdev/schedy:v1.0.0
         ports:
         - containerPort: 8080
         env:
