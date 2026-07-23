@@ -1,0 +1,33 @@
+# Minimal, copy-paste Schedy deployment.
+#
+#   docker compose up -d
+#
+# Then POST tasks to http://localhost:8080/tasks. Scheduled tasks persist in the
+# named "schedy-data" volume, so they survive `docker compose down` + `up`.
+services:
+  schedy:
+    image: ghcr.io/ksamirdev/schedy:latest
+    # Pin a release tag for production, e.g. ghcr.io/ksamirdev/schedy:v0.1.0
+    ports:
+      - "8080:8080"
+    environment:
+      # Strongly recommended: set a key so every endpoint requires X-API-Key.
+      # Put it in a .env file next to this one (SCHEDY_API_KEY=change-me), or
+      # export it in your shell. Leave unset to run open - fine for a local
+      # trial, not for anything reachable from the internet.
+      SCHEDY_API_KEY: ${SCHEDY_API_KEY:-}
+      # How long finished tasks are kept before purge (Go duration).
+      SCHEDY_HISTORY_TTL: ${SCHEDY_HISTORY_TTL:-72h}
+    volumes:
+      - schedy-data:/data
+    restart: unless-stopped
+    healthcheck:
+      # /readyz returns 200 only when the store is reachable (no auth needed).
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  schedy-data:
