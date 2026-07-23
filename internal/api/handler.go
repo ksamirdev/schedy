@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,16 @@ import (
 )
 
 const DEFAULT_RETRY_INTERVAL = 2000
+
+// validMethods is the whitelist of HTTP verbs a task may deliver.
+var validMethods = map[string]bool{
+	http.MethodGet:    true,
+	http.MethodPost:   true,
+	http.MethodPut:    true,
+	http.MethodPatch:  true,
+	http.MethodDelete: true,
+	http.MethodHead:   true,
+}
 
 type Handler struct {
 	Store  scheduler.Store
@@ -46,6 +57,7 @@ func (h *Handler) WithAuth(next http.HandlerFunc) http.HandlerFunc {
 // Server-owned state (id, status, attempts, finished_at) is deliberately absent.
 type taskRequest struct {
 	URL           string            `json:"url"`
+	Method        string            `json:"method"` // HTTP verb, defaults to POST
 	Headers       map[string]string `json:"headers"`
 	Payload       any               `json:"payload"`
 	ExecuteAt     string            `json:"execute_at"` // RFC3339
@@ -64,6 +76,14 @@ func decodeTaskRequest(w http.ResponseWriter, r *http.Request) (taskRequest, tim
 	}
 	if req.URL == "" {
 		http.Error(w, "url is required", http.StatusBadRequest)
+		return req, time.Time{}, false
+	}
+	if req.Method == "" {
+		req.Method = http.MethodPost
+	}
+	req.Method = strings.ToUpper(req.Method)
+	if !validMethods[req.Method] {
+		http.Error(w, "invalid method", http.StatusBadRequest)
 		return req, time.Time{}, false
 	}
 	t, err := time.Parse(time.RFC3339, req.ExecuteAt)
@@ -159,6 +179,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		ID:             uuid.NewString(),
 		IdempotencyKey: idempotencyKey,
 		URL:            req.URL,
+		Method:         req.Method,
 		Headers:        req.Headers,
 		Payload:        req.Payload,
 		ExecuteAt:      t,
@@ -198,6 +219,7 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// attempts already logged, and that delivery record is not the client's to
 	// overwrite.
 	task.URL = req.URL
+	task.Method = req.Method
 	task.Headers = req.Headers
 	task.Payload = req.Payload
 	task.ExecuteAt = execAt

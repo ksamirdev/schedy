@@ -34,6 +34,7 @@ type Task struct {
 	// Task's identity to the caller, independent of what it is scheduled to do.
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	URL            string            `json:"url"`
+	Method         string            `json:"method"` // HTTP verb, defaults to POST
 	ExecuteAt      time.Time         `json:"execute_at"`
 	Headers        map[string]string `json:"headers"` // Custom headers
 	Payload        any               `json:"payload"` // Flexible payload

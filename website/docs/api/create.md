@@ -17,7 +17,8 @@ Schedule an HTTP POST for a future time.
 | Field            | Type   | Description                                                        |
 |------------------|--------|--------------------------------------------------------------------|
 | `execute_at`     | string | **Required.** When to run (RFC3339, UTC). Must be in the future.   |
-| `url`            | string | **Required.** Where to POST.                                       |
+| `url`            | string | **Required.** Where to send the request.                          |
+| `method`         | string | Optional HTTP verb: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` (default `POST`). `GET`/`HEAD` send no body. |
 | `headers`        | object | Optional map of HTTP headers to send.                              |
 | `payload`        | any    | Optional body: JSON object, string, or form data.                 |
 | `retries`        | int    | Optional number of retries.                                        |
