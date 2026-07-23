@@ -46,3 +46,23 @@ status code, error, and duration.
 Retries happen inline within a single run, so the backoff horizon is bounded by
 the process lifetime: if the process restarts mid-backoff, the task is re-queued
 from the start rather than resuming its remaining waits.
+
+## Failure callback
+
+Set `SCHEDY_ON_FAILURE_URL` and a task that exhausts its retries POSTs a single,
+best-effort notification there before going quiet, so a permanent failure at 3am
+is not silent:
+
+```json
+{
+  "id": "b1c2...",
+  "status": "failed",
+  "attempts": 4,
+  "last_error": "unexpected status code: 500",
+  "status_code": 500
+}
+```
+
+The callback is fire-and-forget: it is never retried, and a failing callback
+never triggers a callback about itself. It is global (one URL for the whole
+server) and failure-only - success does not call back.
