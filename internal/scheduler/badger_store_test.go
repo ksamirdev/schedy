@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -22,6 +23,36 @@ func setupBadgerDB(t *testing.T) (*BadgerStore, func()) {
 	}
 
 	return store, cleanup
+}
+
+// RunGC must fire real value-log GC passes against a live DB without erroring
+// the caller, stop promptly when its context is cancelled, and leave the store
+// cleanly closeable.
+func TestRunGCAndClose(t *testing.T) {
+	path := "./testdb_" + uuid.New().String()
+	store, err := NewBadgerStore(path, time.Hour)
+	require.NoError(t, err)
+	defer os.RemoveAll(path)
+
+	require.NoError(t, store.Save(Task{ID: "g1", ExecuteAt: time.Now().Add(time.Hour)}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		store.RunGC(ctx, 10*time.Millisecond) // tight interval so passes actually run
+		close(done)
+	}()
+
+	time.Sleep(60 * time.Millisecond) // let several GC ticks fire
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunGC did not stop after context cancel")
+	}
+
+	require.NoError(t, store.Close(), "store must close cleanly after GC")
 }
 
 func TestSaveAndGetTasks(t *testing.T) {

@@ -61,6 +61,15 @@ func main() {
 
 	go r.Start(ctx)
 
+	// Reclaim BadgerDB value-log garbage periodically. Signal when the loop has
+	// observed cancellation so shutdown can close the store without racing an
+	// in-flight GC pass.
+	gcDone := make(chan struct{})
+	go func() {
+		store.RunGC(ctx, 10*time.Minute)
+		close(gcDone)
+	}()
+
 	go func() {
 		log.Printf("Listening on %s", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -71,4 +80,8 @@ func main() {
 	<-ctx.Done()
 	log.Println("Shutting down...")
 	srv.Shutdown(context.Background())
+	<-gcDone
+	if err := store.Close(); err != nil {
+		log.Printf("close store: %v", err)
+	}
 }
