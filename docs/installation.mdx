@@ -81,4 +81,4 @@ For more details on health probes, see [Health checks](/api/health).
 
 ## Persistence
 
-Data persists to the `data/` directory (BadgerDB), so tasks survive restarts. Back it up to preserve scheduled work.
+Data persists to the `data/` directory (BadgerDB), so tasks survive restarts. To preserve scheduled work, take a safe online snapshot rather than copying the live directory - see [Backup & Restore](/backup).

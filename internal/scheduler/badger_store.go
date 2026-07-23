@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -67,6 +69,43 @@ func (s *BadgerStore) RunGC(ctx context.Context, interval time.Duration) {
 			}
 		}
 	}
+}
+
+// Backup streams a consistent snapshot of the entire store to w using
+// BadgerDB's native online backup. It is safe to call while the store is
+// serving traffic - unlike hot-copying the live data directory, which can
+// capture a torn LSM tree. A full (not incremental) snapshot is written.
+func (s *BadgerStore) Backup(w io.Writer) error {
+	_, err := s.db.Backup(w, 0)
+	return err
+}
+
+// Restore loads a Backup snapshot into a fresh data directory using BadgerDB's
+// native Load. It refuses to run against a non-empty directory so a restore can
+// never half-overwrite a live store; restore into an empty dir, then start the
+// server against it. This is an offline operation - nothing else may hold the
+// directory open.
+func Restore(dir, backupFile string) error {
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		return fmt.Errorf("refusing to restore: data directory %q is not empty", dir)
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	f, err := os.Open(backupFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	opts := badger.DefaultOptions(dir).WithLogger(nil)
+	db, err := badger.Open(opts)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	return db.Load(f, 256)
 }
 
 func (s *BadgerStore) put(txn *badger.Txn, task Task) error {

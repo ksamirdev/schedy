@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -53,6 +54,55 @@ func TestRunGCAndClose(t *testing.T) {
 	}
 
 	require.NoError(t, store.Close(), "store must close cleanly after GC")
+}
+
+// Backup then Restore into a fresh directory must round-trip every task, and
+// Restore must refuse a directory that already holds data.
+func TestBackupAndRestore(t *testing.T) {
+	src, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	require.NoError(t, src.Save(Task{ID: "b1", ExecuteAt: now.Add(time.Hour), URL: "http://x/1"}))
+	require.NoError(t, src.Save(Task{ID: "b2", ExecuteAt: now.Add(2 * time.Hour), URL: "http://x/2"}))
+
+	// Online backup to a file while src is open.
+	tmp := t.TempDir()
+	backupFile := filepath.Join(tmp, "backup.badger")
+	f, err := os.Create(backupFile)
+	require.NoError(t, err)
+	require.NoError(t, src.Backup(f))
+	require.NoError(t, f.Close())
+
+	t.Run("restores every task into a fresh dir", func(t *testing.T) {
+		restoreDir := filepath.Join(tmp, "restored")
+		require.NoError(t, Restore(restoreDir, backupFile))
+
+		dst, err := NewBadgerStore(restoreDir, time.Hour)
+		require.NoError(t, err)
+		defer dst.db.Close()
+
+		all, err := dst.ListTasks("")
+		require.NoError(t, err)
+		assert.Len(t, all, 2)
+
+		got, err := dst.GetTask("b1")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "http://x/1", got.URL)
+	})
+
+	t.Run("refuses a non-empty data dir", func(t *testing.T) {
+		occupied := filepath.Join(tmp, "occupied")
+		busy, err := NewBadgerStore(occupied, time.Hour)
+		require.NoError(t, err)
+		require.NoError(t, busy.Save(Task{ID: "keep", ExecuteAt: now.Add(time.Hour)}))
+		require.NoError(t, busy.db.Close())
+
+		err = Restore(occupied, backupFile)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not empty")
+	})
 }
 
 func TestSaveAndGetTasks(t *testing.T) {

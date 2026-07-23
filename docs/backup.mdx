@@ -1,0 +1,46 @@
+---
+title: "Backup & Restore"
+description: "Take a safe online snapshot of Schedy's store and restore it, using BadgerDB's native backup - no dependencies, no downtime."
+---
+
+Schedy persists every task to the `data/` directory (BadgerDB).
+That directory is a live LSM tree, so copying it while Schedy is running - `cp -r data/`, a volume snapshot mid-write, `rsync` of an open store - can capture a half-written state and restore to silent corruption.
+
+Use the backup endpoint instead. It streams a consistent snapshot that is safe to take while Schedy is serving traffic.
+
+## Take a backup
+
+`GET /admin/backup` streams a full snapshot of the store. It sits behind the same API key as every other endpoint, so send `X-API-Key` if one is configured.
+
+```bash
+curl -H "X-API-Key: your-secret" \
+  http://localhost:8080/admin/backup \
+  -o schedy-backup.badger
+```
+
+The response is a single binary file. Store it wherever you keep backups; run the command on a schedule (cron, a Kubernetes `CronJob`) for point-in-time snapshots.
+
+<Note>
+  The snapshot is a full copy each time - there is no incremental or `since` mode. For most Schedy stores (pending tasks plus recent history) that is a small file.
+</Note>
+
+## Restore a backup
+
+Restore is an **offline** operation: it runs against a stopped server with the `restore` subcommand.
+
+```bash
+schedy restore schedy-backup.badger
+```
+
+It loads the snapshot into the `data/` directory and exits.
+To protect a running deployment, restore **refuses to run if `data/` already contains data** - it will never half-overwrite a live store:
+
+```
+restore: refusing to restore: data directory "data" is not empty
+```
+
+To restore, point Schedy at an empty directory (or move the existing `data/` aside first), run `schedy restore`, then start the server as usual.
+
+<Warning>
+  Nothing else may hold the data directory open during a restore. Stop the server first.
+</Warning>
