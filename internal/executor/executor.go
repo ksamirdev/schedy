@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -29,21 +30,31 @@ func NewExecutor() *Executor {
 	}
 }
 
-// Execute delivers one HTTP POST for the task and reports the attempt outcome
+// Execute delivers one HTTP request for the task (task.Method, default POST) and reports the attempt outcome
 // (status code, error, duration). A 2xx yields a nil Err.
 func (e *Executor) Execute(task scheduler.Task) Result {
-	var bodyBytes []byte
-	switch v := task.Payload.(type) {
-	case string:
-		bodyBytes = []byte(v)
-	case []byte:
-		bodyBytes = v
-	default:
-		// fallback to JSON
-		bodyBytes, _ = json.Marshal(task.Payload)
+	method := task.Method
+	if method == "" {
+		method = http.MethodPost
 	}
 
-	req, err := http.NewRequest(http.MethodPost, task.URL, bytes.NewBuffer(bodyBytes))
+	var body io.Reader
+	// GET/HEAD carry no request body.
+	if method != http.MethodGet && method != http.MethodHead {
+		var bodyBytes []byte
+		switch v := task.Payload.(type) {
+		case string:
+			bodyBytes = []byte(v)
+		case []byte:
+			bodyBytes = v
+		default:
+			// fallback to JSON
+			bodyBytes, _ = json.Marshal(task.Payload)
+		}
+		body = bytes.NewBuffer(bodyBytes)
+	}
+
+	req, err := http.NewRequest(method, task.URL, body)
 	if err != nil {
 		return Result{Err: err}
 	}
@@ -52,8 +63,9 @@ func (e *Executor) Execute(task scheduler.Task) Result {
 	for k, v := range task.Headers {
 		req.Header.Set(k, v)
 	}
-	// If no Content-Type header is set, default to application/json
-	if req.Header.Get("Content-Type") == "" {
+	// If no Content-Type header is set, default to application/json (only when
+	// there is a body to describe).
+	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 

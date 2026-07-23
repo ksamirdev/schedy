@@ -41,7 +41,8 @@ Identical to [create](./create.md).
 | Field            | Type   | Description                                                        |
 |------------------|--------|--------------------------------------------------------------------|
 | `execute_at`     | string | **Required.** When to run (RFC3339, UTC). Must be in the future.   |
-| `url`            | string | **Required.** Where to POST.                                       |
+| `url`            | string | **Required.** Where to send the request.                          |
+| `method`         | string | Optional HTTP verb: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. Omitted = `POST`. |
 | `headers`        | object | Optional map of HTTP headers to send. Omitted = cleared.           |
 | `payload`        | any    | Optional body: JSON object, string, or form data. Omitted = cleared.|
 | `retries`        | int    | Optional number of retries. Omitted = `0`.                         |
