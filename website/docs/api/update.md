@@ -26,8 +26,10 @@ task with that body - omit `headers` and the old headers are gone, omit
 `retries` and it drops to `0`.
 Send the complete task every time.
 
-The server-owned fields are never touched: `id`, `status`, `attempts` and
-`finished_at` carry over as they were.
+The server-owned fields are never touched: `id`, `idempotency_key`, `status`,
+`attempts` and `finished_at` carry over as they were.
+The [key](../concepts/idempotency.md) in particular is set once at creation and
+is not settable here - it names the task, not what the task does.
 That matters because `pending` does not mean "never fired" - a task re-queued
 after a crash is pending with attempt history already logged, and updating it
 must not erase the evidence that a delivery may already have gone out.

@@ -103,6 +103,37 @@ func (h *Handler) loadTask(w http.ResponseWriter, r *http.Request) (*scheduler.T
 	return task, true
 }
 
+// findDuplicate returns the pending task a create request would duplicate, or
+// nil if there is none.
+//
+// An Idempotency-Key matches on the key alone: the key is the caller's name for
+// the task, so a repeat of a request that has already been accepted returns the
+// task it created, whatever the new body says. Without a key, an identical
+// schedule - same url, same execute_at to within a second - is what counts as a
+// repeat.
+//
+// Only pending tasks are considered. A task that has already run is history
+// rather than a live schedule, and history expires under SCHEDY_HISTORY_TTL,
+// which would otherwise make deduplication quietly depend on retention.
+func (h *Handler) findDuplicate(key, url string, executeAt time.Time) (*scheduler.Task, error) {
+	pending, err := h.Store.ListTasks(string(scheduler.StatusPending))
+	if err != nil {
+		return nil, err
+	}
+	for _, task := range pending {
+		if key != "" {
+			if task.IdempotencyKey == key {
+				return &task, nil
+			}
+			continue
+		}
+		if task.URL == url && task.ExecuteAt.Sub(executeAt).Abs() < time.Second {
+			return &task, nil
+		}
+	}
+	return nil, nil
+}
+
 // CreateTask schedules a new task for a future time.
 func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	req, t, ok := decodeTaskRequest(w, r)
@@ -110,34 +141,29 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Idempotency: Check for existing task with same URL and execute_at
-	// If Idempotency-Key header is provided, use it for stricter matching
 	idempotencyKey := r.Header.Get("Idempotency-Key")
-	if idempotencyKey != "" || req.URL != "" {
-		existingTasks, err := h.Store.ListTasks(string(scheduler.StatusPending))
-		if err == nil {
-			for _, existing := range existingTasks {
-				// Match by URL and execute time (within 1 second tolerance)
-				if existing.URL == req.URL &&
-					existing.ExecuteAt.Unix() == t.Unix() {
-					// Return existing task instead of creating duplicate
-					w.WriteHeader(http.StatusOK)
-					json.NewEncoder(w).Encode(existing)
-					return
-				}
-			}
-		}
+	existing, err := h.findDuplicate(idempotencyKey, req.URL, t)
+	if err != nil {
+		http.Error(w, "could not check for duplicates", http.StatusInternalServerError)
+		return
+	}
+	if existing != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(existing)
+		return
 	}
 
 	task := scheduler.Task{
-		ID:            uuid.NewString(),
-		URL:           req.URL,
-		Headers:       req.Headers,
-		Payload:       req.Payload,
-		ExecuteAt:     t,
-		Retries:       req.Retries,
-		RetryInterval: *req.RetryInterval,
-		Status:        scheduler.StatusPending,
+		ID:             uuid.NewString(),
+		IdempotencyKey: idempotencyKey,
+		URL:            req.URL,
+		Headers:        req.Headers,
+		Payload:        req.Payload,
+		ExecuteAt:      t,
+		Retries:        req.Retries,
+		RetryInterval:  *req.RetryInterval,
+		Status:         scheduler.StatusPending,
 	}
 	if err := h.Store.Save(task); err != nil {
 		http.Error(w, "could not save task", http.StatusInternalServerError)
