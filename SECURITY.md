@@ -2,9 +2,13 @@
 
 ## Supported versions
 
-Schedy is pre-1.0 and ships from `main`.
-Security fixes land on the latest release only; please reproduce on the newest
+Security fixes land on the latest `1.x` release. Please reproduce on the newest
 release (or `main`) before reporting.
+
+| Version | Supported |
+| ------- | --------- |
+| 1.x     | ✅        |
+| < 1.0   | ❌        |
 
 ## Reporting a vulnerability
 
