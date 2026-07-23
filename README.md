@@ -1,71 +1,69 @@
 # Schedy
 
-> **A self-hostable, ultra-lightweight HTTP task scheduler for the weird and wonderful automation you want.**
+Schedule an HTTP request for later.
 
-Schedy schedules HTTP POST requests to any endpoint, at any time, with custom headers and payloads.
-Perfect for webhooks, bots, reminders, and integrations - without the bloat.
-
-📖 **Full documentation: [schedy.mintlify.site](https://schedy.mintlify.site)**
-
-## Features
-
-- 🕒 **Schedule HTTP tasks** for any time in the future
-- 🔁 **Retries** with configurable count and interval
-- 📊 **Status & history** - every task tracks its lifecycle and per-attempt log
-- 🪶 **Ultra-lightweight** - single binary, embedded BadgerDB, no external services
-- 🏠 **Self-hostable** - runs anywhere Go runs (Linux, macOS, Windows, ARM, x86)
-- 🦄 **Weirdly simple** - no UI, no cron, just HTTP
-
-## Run in 1 minute
+Tell Schedy a URL and a time; it fires the request when the time comes, retries if it fails, and remembers what happened.
+It's one Go binary with an embedded database - no Redis, no Postgres, no cron daemon to babysit.
+Point it at a directory and run it.
 
 ```sh
 docker run -p 8080:8080 ghcr.io/ksamirdev/schedy:latest
 ```
 
-Also on Docker Hub (`ksamirdev/schedy`) and as prebuilt binaries on the
-[Releases](https://github.com/ksamirdev/schedy/releases) page.
+```sh
+curl -X POST http://localhost:8080/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/webhook",
+    "execute_at": "2030-01-01T09:00:00Z",
+    "payload": {"hello": "world"}
+  }'
+```
 
-Set an API key to require the `X-API-Key` header on every endpoint:
+You get back a task id.
+At `execute_at`, Schedy POSTs your payload to the URL, retries on failure, and keeps the outcome so you can look it up later.
+
+## What it does
+
+- Fires an HTTP request (any method) at a scheduled time, with your headers and body.
+- Retries failures on a fixed or exponential-backoff schedule.
+- Tracks each task's status and logs every delivery attempt.
+- Repeats on an interval if you want it to - `"schedule": "15m"`.
+
+Also there when you need it: HMAC request signing, idempotency keys, online backup/restore, and an SSRF egress guard.
+Full reference lives at **[schedy.mintlify.site](https://schedy.mintlify.site)**.
+
+## What it deliberately isn't
+
+Schedy is not cron and not a workflow engine.
+There is no cron syntax, no timezones or DST, no DAGs, no fan-out.
+If you need a calendar or Temporal-grade orchestration, reach for one of those - Schedy stays a "fire this HTTP request later" box on purpose.
+That constraint is the feature.
+
+## Running it
 
 ```sh
 docker run -p 8080:8080 -e SCHEDY_API_KEY=your-secret ghcr.io/ksamirdev/schedy:latest
 ```
 
-## Schedule a task
+Set `SCHEDY_API_KEY` and every endpoint requires the `X-API-Key` header.
+Images are also on Docker Hub (`ksamirdev/schedy`), and prebuilt binaries are on the [Releases](https://github.com/ksamirdev/schedy/releases) page.
 
-```sh
-curl -X POST http://localhost:8080/tasks \
-  -H "Content-Type: application/json" \
-  -d '{
-    "execute_at": "2025-05-26T15:00:00Z",
-    "url": "https://example.com/webhook",
-    "payload": {"hello": "world"}
-  }'
-```
-
-That's the gist. Retries, status tracking, history, filtering, bulk delete, and the
-full API reference live in the **[docs](https://schedy.mintlify.site)**.
-
-## Build from source
+From source (Go 1.23+):
 
 ```sh
 go build -o schedy ./cmd/schedy
-SCHEDY_API_KEY=your-secret ./schedy --port 8080
+./schedy --port 8080
 ```
 
-Requires Go 1.23+. Tasks persist to the `data/` directory (BadgerDB), so they
-survive restarts. To preserve scheduled tasks, take a safe online snapshot with
-`GET /admin/backup` (restore via `schedy restore <file>`) rather than copying the
-live directory - see the [docs](https://schedy.mintlify.site/backup).
+Tasks persist to `data/` (BadgerDB) and survive restarts.
+Snapshot them with `GET /admin/backup` instead of copying the live directory - see the [backup docs](https://schedy.mintlify.site/backup).
 
 ## Contributing
 
-PRs, issues, and weird use-cases welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
-and our [Code of Conduct](CODE_OF_CONDUCT.md).
-
-## Support Schedy
-
-This project's future depends on community support. [Become a sponsor today.](https://github.com/sponsors/ksamirdev)
+Issues and PRs are welcome, odd use-cases especially.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+If Schedy saved you a cron box or a queue, [sponsoring](https://github.com/sponsors/ksamirdev) helps keep it maintained.
 
 ## License
 
