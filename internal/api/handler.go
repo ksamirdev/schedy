@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -44,7 +45,9 @@ func (h *Handler) WithAuth(next http.HandlerFunc) http.HandlerFunc {
 				http.Error(w, "missing API key", http.StatusUnauthorized)
 				return
 			}
-			if key != h.APIKey {
+			// Constant-time compare: a plain != leaks the key one byte at a
+			// time through response timing.
+			if subtle.ConstantTimeCompare([]byte(key), []byte(h.APIKey)) != 1 {
 				http.Error(w, "invalid API key", http.StatusForbidden)
 				return
 			}

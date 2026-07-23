@@ -4,11 +4,34 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
+
+// httptest servers bind to loopback, which the SSRF guard blocks by default.
+// Opt out for the package so NewExecutor() can reach them; the guard itself is
+// exercised directly via newExecutor(true) in TestExecuteBlocksPrivateTargets.
+func TestMain(m *testing.M) {
+	os.Setenv("SCHEDY_ALLOW_PRIVATE_TARGETS", "1")
+	os.Exit(m.Run())
+}
+
+// Verifies the dial-time guard rejects a loopback target when enabled.
+func TestExecuteBlocksPrivateTargets(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	res := newExecutor(true).Execute(scheduler.Task{URL: srv.URL})
+	if res.Err == nil {
+		t.Fatal("expected loopback dial to be blocked")
+	}
+	if !strings.Contains(res.Err.Error(), "blocked dial to non-public address") {
+		t.Errorf("unexpected error: %v", res.Err)
+	}
+}
 
 // Verifies the response body is captured (and truncation flagged) on non-2xx
 // responses, and left empty on success.

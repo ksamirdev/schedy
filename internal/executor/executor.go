@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/ksamirdev/schedy/internal/scheduler"
@@ -30,12 +33,48 @@ type Executor struct {
 	client *http.Client
 }
 
+// NewExecutor builds the delivery client. Dials to private, loopback,
+// link-local (incl. 169.254.169.254 cloud metadata) and unspecified addresses
+// are rejected so schedy cannot be used as an SSRF proxy into its host's
+// network. Set SCHEDY_ALLOW_PRIVATE_TARGETS to opt out for trusted self-hosted
+// setups.
 func NewExecutor() *Executor {
+	return newExecutor(os.Getenv("SCHEDY_ALLOW_PRIVATE_TARGETS") == "")
+}
+
+func newExecutor(guardPrivate bool) *Executor {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if guardPrivate {
+		dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+		// Control runs after DNS resolution on the concrete IP being dialed, so
+		// it also defeats DNS-rebind and redirect-to-metadata that a pre-resolve
+		// URL check would miss.
+		dialer.Control = blockPrivateDial
+		transport.DialContext = dialer.DialContext
+	}
 	return &Executor{
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
+			Transport: transport,
 		},
 	}
+}
+
+// blockPrivateDial rejects any dial to a non-public address.
+func blockPrivateDial(network, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("cannot parse dial address %q", address)
+	}
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return fmt.Errorf("blocked dial to non-public address %s", ip)
+	}
+	return nil
 }
 
 // Execute delivers one HTTP request for the task (task.Method, default POST) and reports the attempt outcome
