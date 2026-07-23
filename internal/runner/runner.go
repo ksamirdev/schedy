@@ -81,7 +81,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 
 			// Built from the re-read copy so an update to the retry settings
 			// takes effect on this run rather than the next one.
-			attempt := newAttempt(t.Retries, t.RetryInterval)
+			attempt := newAttempt(t.Retries, t.RetryInterval, t.RetryMode)
 
 			log.Printf("#%d | Executing task: %s", idx, t.ID)
 

@@ -56,13 +56,14 @@ func (h *Handler) WithAuth(next http.HandlerFunc) http.HandlerFunc {
 // taskRequest is the client-owned shape of a task, shared by create and update.
 // Server-owned state (id, status, attempts, finished_at) is deliberately absent.
 type taskRequest struct {
-	URL           string            `json:"url"`
-	Method        string            `json:"method"` // HTTP verb, defaults to POST
-	Headers       map[string]string `json:"headers"`
-	Payload       any               `json:"payload"`
-	ExecuteAt     string            `json:"execute_at"` // RFC3339
-	Retries       int               `json:"retries"`
-	RetryInterval *int              `json:"retry_interval"` // milliseconds
+	URL           string              `json:"url"`
+	Method        string              `json:"method"` // HTTP verb, defaults to POST
+	Headers       map[string]string   `json:"headers"`
+	Payload       any                 `json:"payload"`
+	ExecuteAt     string              `json:"execute_at"` // RFC3339
+	Retries       int                 `json:"retries"`
+	RetryInterval *int                `json:"retry_interval"` // milliseconds
+	RetryMode     scheduler.RetryMode `json:"retry_mode"`     // fixed (default) or exponential
 }
 
 // decodeTaskRequest reads and validates a task body, applying defaults for the
@@ -98,6 +99,13 @@ func decodeTaskRequest(w http.ResponseWriter, r *http.Request) (taskRequest, tim
 	if req.RetryInterval == nil {
 		req.RetryInterval = new(int)
 		*req.RetryInterval = DEFAULT_RETRY_INTERVAL
+	}
+	if req.RetryMode == "" {
+		req.RetryMode = scheduler.RetryFixed
+	}
+	if !req.RetryMode.Valid() {
+		http.Error(w, "invalid retry_mode", http.StatusBadRequest)
+		return req, time.Time{}, false
 	}
 	return req, t, true
 }
@@ -185,6 +193,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		ExecuteAt:      t,
 		Retries:        req.Retries,
 		RetryInterval:  *req.RetryInterval,
+		RetryMode:      req.RetryMode,
 		Status:         scheduler.StatusPending,
 	}
 	if err := h.Store.Save(task); err != nil {
@@ -225,6 +234,7 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	task.ExecuteAt = execAt
 	task.Retries = req.Retries
 	task.RetryInterval = *req.RetryInterval
+	task.RetryMode = req.RetryMode
 
 	if err := h.Store.Update(*task); err != nil {
 		http.Error(w, "could not update task", http.StatusInternalServerError)

@@ -23,6 +23,7 @@ Schedule an HTTP POST for a future time.
 | `payload`        | any    | Optional body: JSON object, string, or form data.                 |
 | `retries`        | int    | Optional number of retries.                                        |
 | `retry_interval` | int    | Optional ms between retries (default `2000`).                      |
+| `retry_mode`     | string | Optional retry timing: `fixed` (default) or `exponential` (backoff + jitter). See [Retries](../concepts/retries.md). |
 
 ## Example
 
