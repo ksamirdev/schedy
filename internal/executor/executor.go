@@ -11,11 +11,19 @@ import (
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
 
+// maxBodyCapture bounds how much of a failed response body we read into the
+// attempt log. Enough to see the error message, small enough to keep records lean.
+const maxBodyCapture = 2048
+
 // Result is the outcome of a single delivery attempt.
 type Result struct {
 	StatusCode int           // HTTP status, 0 on transport error
 	Err        error         // nil on 2xx, otherwise transport error or non-2xx
 	Duration   time.Duration // round-trip time
+	// ResponseBody holds up to maxBodyCapture bytes of the response body,
+	// captured only on non-2xx responses (empty on success/transport error).
+	ResponseBody          string
+	ResponseBodyTruncated bool // true if the body exceeded maxBodyCapture
 }
 
 type Executor struct {
@@ -79,10 +87,19 @@ func (e *Executor) Execute(task scheduler.Task) Result {
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		// Capture the first maxBodyCapture bytes to explain the failure. Read one
+		// extra byte so we can flag truncation without a second read.
+		buf, _ := io.ReadAll(io.LimitReader(res.Body, maxBodyCapture+1))
+		truncated := len(buf) > maxBodyCapture
+		if truncated {
+			buf = buf[:maxBodyCapture]
+		}
 		return Result{
-			StatusCode: res.StatusCode,
-			Err:        fmt.Errorf("unexpected status code: %d", res.StatusCode),
-			Duration:   dur,
+			StatusCode:            res.StatusCode,
+			Err:                   fmt.Errorf("unexpected status code: %d", res.StatusCode),
+			Duration:              dur,
+			ResponseBody:          string(buf),
+			ResponseBodyTruncated: truncated,
 		}
 	}
 

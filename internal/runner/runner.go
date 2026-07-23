@@ -102,6 +102,8 @@ func (r *Runner) runOnce(start, end time.Time) {
 				}
 				if res.Err != nil {
 					att.Error = res.Err.Error()
+					att.ResponseBody = res.ResponseBody
+					att.ResponseBodyTruncated = res.ResponseBodyTruncated
 				}
 				t.Attempts = append(t.Attempts, att)
 

@@ -4,10 +4,57 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
+
+// Verifies the response body is captured (and truncation flagged) on non-2xx
+// responses, and left empty on success.
+func TestExecuteCapturesFailedBody(t *testing.T) {
+	t.Run("non-2xx captures body", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, "boom: bad payload")
+		}))
+		defer srv.Close()
+
+		res := NewExecutor().Execute(scheduler.Task{URL: srv.URL})
+		if res.Err == nil {
+			t.Fatal("expected error on 400")
+		}
+		if res.ResponseBody != "boom: bad payload" || res.ResponseBodyTruncated {
+			t.Errorf("body=%q truncated=%v", res.ResponseBody, res.ResponseBodyTruncated)
+		}
+	})
+
+	t.Run("oversized body truncated", func(t *testing.T) {
+		big := strings.Repeat("x", maxBodyCapture+500)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			io.WriteString(w, big)
+		}))
+		defer srv.Close()
+
+		res := NewExecutor().Execute(scheduler.Task{URL: srv.URL})
+		if len(res.ResponseBody) != maxBodyCapture || !res.ResponseBodyTruncated {
+			t.Errorf("len=%d truncated=%v", len(res.ResponseBody), res.ResponseBodyTruncated)
+		}
+	})
+
+	t.Run("success captures nothing", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, "ok")
+		}))
+		defer srv.Close()
+
+		res := NewExecutor().Execute(scheduler.Task{URL: srv.URL})
+		if res.Err != nil || res.ResponseBody != "" {
+			t.Errorf("err=%v body=%q", res.Err, res.ResponseBody)
+		}
+	})
+}
 
 // Verifies task.Method is honored and GET/HEAD carry no body.
 func TestExecuteMethodAndBody(t *testing.T) {
