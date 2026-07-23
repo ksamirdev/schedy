@@ -2,12 +2,16 @@ package executor
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -31,6 +35,9 @@ type Result struct {
 
 type Executor struct {
 	client *http.Client
+	// signingSecret, if set (SCHEDY_SIGNING_SECRET), makes Execute attach an
+	// HMAC-SHA256 signature header so receivers can authenticate the request.
+	signingSecret string
 }
 
 // NewExecutor builds the delivery client. Dials to private, loopback,
@@ -57,6 +64,7 @@ func newExecutor(guardPrivate bool) *Executor {
 			Timeout:   10 * time.Second,
 			Transport: transport,
 		},
+		signingSecret: os.Getenv("SCHEDY_SIGNING_SECRET"),
 	}
 }
 
@@ -77,6 +85,26 @@ func blockPrivateDial(network, address string, _ syscall.RawConn) error {
 	return nil
 }
 
+// sign attaches an HMAC-SHA256 signature so receivers can authenticate that the
+// request genuinely came from schedy. No-op unless SCHEDY_SIGNING_SECRET is set.
+//
+// The signature is computed over "<unix-ts>.<body>" and sent alongside the
+// timestamp, so a receiver that verifies both the MAC and a bounded clock skew
+// gets replay protection, not just authenticity. Receiver verification ships as
+// a docs snippet rather than an SDK.
+func (e *Executor) sign(req *http.Request, body []byte) {
+	if e.signingSecret == "" {
+		return
+	}
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(e.signingSecret))
+	mac.Write([]byte(ts))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	req.Header.Set("X-Schedy-Timestamp", ts)
+	req.Header.Set("X-Schedy-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+}
+
 // Execute delivers one HTTP request for the task (task.Method, default POST) and reports the attempt outcome
 // (status code, error, duration). A 2xx yields a nil Err.
 func (e *Executor) Execute(task scheduler.Task) Result {
@@ -85,10 +113,10 @@ func (e *Executor) Execute(task scheduler.Task) Result {
 		method = http.MethodPost
 	}
 
+	var bodyBytes []byte
 	var body io.Reader
 	// GET/HEAD carry no request body.
 	if method != http.MethodGet && method != http.MethodHead {
-		var bodyBytes []byte
 		switch v := task.Payload.(type) {
 		case string:
 			bodyBytes = []byte(v)
@@ -115,6 +143,10 @@ func (e *Executor) Execute(task scheduler.Task) Result {
 	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// Sign after custom headers so a task's own headers can't spoof or clear the
+	// signature. Signing over "timestamp.body" (not the body alone) lets the
+	// receiver reject replays outside a freshness window.
+	e.sign(req, bodyBytes)
 
 	start := time.Now()
 	res, err := e.client.Do(req)
