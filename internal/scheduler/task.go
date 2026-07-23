@@ -61,6 +61,11 @@ type Task struct {
 	Retries        int               `json:"retries"`
 	RetryInterval  int               `json:"retry_interval"` // milliseconds, base delay between retries
 	RetryMode      RetryMode         `json:"retry_mode"`     // fixed (default) or exponential
+	// Schedule, if set, makes the task recurring: after each fire a fresh
+	// one-shot task is enqueued at fire_time + Schedule. Parsed by stdlib
+	// time.ParseDuration ("15m", "2h"). Deliberately NOT cron - no calendar,
+	// timezone, DST, or catch-up. Cancelling the pending task stops the chain.
+	Schedule string `json:"schedule,omitempty"`
 
 	Status     TaskStatus `json:"status"`
 	Attempts   []Attempt  `json:"attempts,omitempty"`

@@ -218,6 +218,45 @@ func TestCreateTaskHandler(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
+	t.Run("recurrence schedule", func(t *testing.T) {
+		post := func(schedule string) *httptest.ResponseRecorder {
+			// Distinct URL so the shared store's earlier tasks don't dedup this one.
+			reqBody := map[string]any{
+				"url":        "http://example.com/recurring",
+				"execute_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+			}
+			if schedule != "" {
+				reqBody["schedule"] = schedule
+			}
+			body, _ := json.Marshal(reqBody)
+			req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			handler.CreateTask(w, req)
+			return w
+		}
+
+		t.Run("valid duration is accepted and stored", func(t *testing.T) {
+			w := post("15m")
+			require.Equal(t, http.StatusCreated, w.Code)
+			var task scheduler.Task
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &task))
+			assert.Equal(t, "15m", task.Schedule)
+		})
+
+		t.Run("cron syntax is rejected", func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, post("*/5 * * * *").Code)
+		})
+
+		t.Run("non-duration is rejected", func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, post("daily").Code)
+		})
+
+		t.Run("non-positive duration is rejected", func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, post("0s").Code)
+		})
+	})
+
 	t.Run("idempotency - duplicate task", func(t *testing.T) {
 		executeAt := time.Now().Add(2 * time.Hour)
 		reqBody := map[string]interface{}{

@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ksamirdev/schedy/internal/executor"
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
@@ -61,6 +62,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 			defer timer.Stop()
 
 			<-timer.C()
+			fireTime := time.Now().UTC()
 
 			// The task may have been cancelled or updated after it was picked up
 			// but before its timer fired. Re-read its current state: a cancel
@@ -134,7 +136,45 @@ func (r *Runner) runOnce(start, end time.Time) {
 			if t.Status == scheduler.StatusFailed {
 				r.notifyFailure(t)
 			}
+
+			r.reschedule(t, fireTime)
 		}(task, i)
+	}
+}
+
+// reschedule re-enqueues a recurring task (Schedule set) as a fresh one-shot at
+// fireTime+interval, forming a stateless chain on the existing one-shot engine.
+// Interval-only by design: no cron, no catch-up. Anchoring the next fire to
+// fireTime (not now) keeps a steady cadence; a task that outran its own interval
+// simply becomes due immediately, it is never replayed to catch up missed fires.
+//
+// A cancelled task never reaches here - the pre-fire re-read returns early on any
+// non-pending status - so cancelling the pending task stops the chain.
+// ponytail: a cancel landing during the brief run window is overwritten by the
+// finalize Update (the same residual TOCTOU noted above); the common case
+// (cancel while pending between fires) stops the chain reliably.
+func (r *Runner) reschedule(t scheduler.Task, fireTime time.Time) {
+	if t.Schedule == "" {
+		return
+	}
+	interval, err := time.ParseDuration(t.Schedule)
+	if err != nil || interval <= 0 {
+		// Validated at create/update time; a bad value here means a hand-edited
+		// record. Drop the chain rather than spin.
+		log.Printf("recurring task %s has invalid schedule %q, not re-enqueuing", t.ID, t.Schedule)
+		return
+	}
+	// The successor is this task at a new time: clone it, then reset identity
+	// (fresh id, no inherited idempotency key) and per-run state.
+	next := t
+	next.ID = uuid.NewString()
+	next.IdempotencyKey = ""
+	next.ExecuteAt = fireTime.Add(interval)
+	next.Status = scheduler.StatusPending
+	next.Attempts = nil
+	next.FinishedAt = nil
+	if err := r.store.Save(next); err != nil {
+		log.Printf("reschedule %s: %v", t.ID, err)
 	}
 }
 
