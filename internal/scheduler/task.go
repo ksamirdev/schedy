@@ -25,6 +25,10 @@ type Attempt struct {
 	StatusCode int       `json:"status_code"`     // HTTP status, 0 on transport error
 	Error      string    `json:"error,omitempty"` // transport or non-2xx description
 	DurationMs int64     `json:"duration_ms"`     // round-trip time in milliseconds
+	// ResponseBody is the first ~2KB of the response body, captured only on
+	// failed (non-2xx) attempts to explain why delivery failed.
+	ResponseBody          string `json:"response_body,omitempty"`
+	ResponseBodyTruncated bool   `json:"response_body_truncated,omitempty"` // true if body was cut at the cap
 }
 
 type Task struct {
