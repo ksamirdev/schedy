@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -38,6 +39,34 @@ func NewBadgerStore(path string, historyTTL time.Duration) (*BadgerStore, error)
 		return nil, err
 	}
 	return &BadgerStore{db: db, ttl: historyTTL}, nil
+}
+
+// Close flushes and releases the underlying BadgerDB. Call once on shutdown so
+// the LSM tree and value log are left in a clean, reopenable state.
+func (s *BadgerStore) Close() error {
+	return s.db.Close()
+}
+
+// RunGC reclaims value-log space on a ticker until ctx is cancelled. BadgerDB
+// never garbage-collects its value log on its own, so without this the single
+// binary silently accumulates on-disk garbage and eventually eats its own disk.
+// Each tick runs GC passes back-to-back until Badger reports nothing left to
+// rewrite (any non-nil error, typically badger.ErrNoRewrite), then waits for
+// the next tick.
+func (s *BadgerStore) RunGC(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			// A successful pass (nil) may leave more to reclaim, so loop until
+			// RunValueLogGC declines with an error.
+			for s.db.RunValueLogGC(0.5) == nil {
+			}
+		}
+	}
 }
 
 func (s *BadgerStore) put(txn *badger.Txn, task Task) error {
