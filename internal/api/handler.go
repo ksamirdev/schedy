@@ -71,8 +71,8 @@ func decodeTaskRequest(w http.ResponseWriter, r *http.Request) (taskRequest, tim
 		http.Error(w, "invalid time (ISO required)", http.StatusBadRequest)
 		return req, time.Time{}, false
 	}
-	if t.UTC().Before(time.Now().UTC()) {
-		http.Error(w, "time cannot be in past", http.StatusBadRequest)
+	if !t.UTC().After(time.Now().UTC()) {
+		http.Error(w, "time must be in the future", http.StatusBadRequest)
 		return req, time.Time{}, false
 	}
 	if req.RetryInterval == nil {
@@ -120,15 +120,16 @@ func (h *Handler) findDuplicate(key, url string, executeAt time.Time) (*schedule
 	if err != nil {
 		return nil, err
 	}
-	for _, task := range pending {
+	for i := range pending {
+		task := &pending[i]
 		if key != "" {
 			if task.IdempotencyKey == key {
-				return &task, nil
+				return task, nil
 			}
 			continue
 		}
 		if task.URL == url && task.ExecuteAt.Sub(executeAt).Abs() < time.Second {
-			return &task, nil
+			return task, nil
 		}
 	}
 	return nil, nil
