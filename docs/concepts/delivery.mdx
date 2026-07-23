@@ -28,7 +28,9 @@ The signature covers `timestamp.body` rather than the body alone, so a captured 
 
 To verify, recompute the HMAC over the timestamp, a literal `.`, and the **raw** request body (before any JSON parsing), then compare in constant time:
 
-```js
+<CodeGroup>
+
+```js Node.js
 import crypto from "node:crypto";
 
 // express.raw({ type: "*/*" }) so `req.body` is the exact bytes Schedy signed.
@@ -46,6 +48,94 @@ function verifySchedy(req, secret, toleranceSec = 300) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 ```
+
+```python Python
+import hashlib
+import hmac
+import time
+
+from flask import request
+
+
+def verify_schedy(secret: str, tolerance_sec: int = 300) -> bool:
+    ts = request.headers.get("X-Schedy-Timestamp", "")
+    sig = request.headers.get("X-Schedy-Signature", "")
+    if not ts.isdigit() or abs(time.time() - int(ts)) > tolerance_sec:
+        return False
+
+    # request.get_data() returns the raw body bytes. Read it before any JSON
+    # parsing: decoding and re-serializing would reorder keys or restyle spacing
+    # and no longer match the exact bytes Schedy signed.
+    signed = ts.encode() + b"." + request.get_data()
+    expected = "sha256=" + hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+
+    # compare_digest is the constant-time compare; encode both so a hostile
+    # signature header can never raise on non-ASCII input.
+    return hmac.compare_digest(sig.encode(), expected.encode())
+```
+
+```go Go
+package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net/http"
+	"strconv"
+	"time"
+)
+
+const toleranceSec = 300
+
+// schedyHandler verifies the Schedy signature before handling the delivery.
+func schedyHandler(secret string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ts := r.Header.Get("X-Schedy-Timestamp")
+		sig := r.Header.Get("X-Schedy-Signature")
+
+		sec, err := strconv.ParseInt(ts, 10, 64)
+		if err != nil || abs(time.Now().Unix()-sec) > toleranceSec {
+			http.Error(w, "bad timestamp", http.StatusUnauthorized)
+			return
+		}
+
+		// io.ReadAll gives the raw body bytes, exactly what Schedy signed.
+		// Verify them before decoding JSON: unmarshalling then re-marshalling
+		// would change the bytes and break the MAC.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "unreadable body", http.StatusBadRequest)
+			return
+		}
+
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(ts))
+		mac.Write([]byte("."))
+		mac.Write(body)
+		expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+		// hmac.Equal is the constant-time compare.
+		if !hmac.Equal([]byte(sig), []byte(expected)) {
+			http.Error(w, "bad signature", http.StatusUnauthorized)
+			return
+		}
+
+		// Signature valid; `body` holds the verified payload.
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func abs(n int64) int64 {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+```
+
+</CodeGroup>
 
 <Note>
   `GET` and `HEAD` deliveries carry no body, so they are signed over `<timestamp>.` (an empty body). The timestamp still authenticates the request and bounds replays.

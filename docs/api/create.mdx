@@ -47,19 +47,94 @@ To stop a recurring task, [cancel](/api/cancel) the current pending task - the c
 
 ## Example
 
-```bash
+<CodeGroup>
+
+```bash cURL
 curl -X POST http://localhost:8080/tasks \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-secret" \
   -d '{
-    "execute_at": "2030-05-26T15:00:00Z",
     "url": "https://example.com/webhook",
-    "headers": {"Authorization": "Bearer TOKEN"},
-    "payload": {"event": "user.created"},
-    "retries": 3,
-    "retry_interval": 5000
+    "execute_at": "2030-01-01T09:00:00Z",
+    "payload": { "event": "user.created" }
   }'
 ```
+
+```javascript JavaScript
+const res = await fetch("http://localhost:8080/tasks", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-API-Key": "your-secret",
+  },
+  body: JSON.stringify({
+    url: "https://example.com/webhook",
+    execute_at: "2030-01-01T09:00:00Z",
+    payload: { event: "user.created" },
+  }),
+});
+
+const task = await res.json();
+console.log(task);
+```
+
+```python Python
+import requests
+
+resp = requests.post(
+    "http://localhost:8080/tasks",
+    headers={
+        "Content-Type": "application/json",
+        "X-API-Key": "your-secret",
+    },
+    json={
+        "url": "https://example.com/webhook",
+        "execute_at": "2030-01-01T09:00:00Z",
+        "payload": {"event": "user.created"},
+    },
+)
+
+print(resp.json())
+```
+
+```go Go
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+)
+
+func main() {
+	body, _ := json.Marshal(map[string]any{
+		"url":        "https://example.com/webhook",
+		"execute_at": "2030-01-01T09:00:00Z",
+		"payload":    map[string]any{"event": "user.created"},
+	})
+
+	req, _ := http.NewRequest("POST", "http://localhost:8080/tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "your-secret")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	out, _ := io.ReadAll(resp.Body)
+	fmt.Println(string(out))
+}
+```
+
+</CodeGroup>
+
+The `X-API-Key` header is only required when the server is started with `SCHEDY_API_KEY` set; otherwise you can omit it.
+Send an optional `Idempotency-Key` header to make retries safe - a repeat with the same key returns the task the first call created instead of scheduling a duplicate.
+See [Idempotency](/concepts/idempotency).
 
 Payloads are flexible - a JSON object (default `Content-Type: application/json`), form data (`application/x-www-form-urlencoded`), or plain text; set the `Content-Type` header to match.
 

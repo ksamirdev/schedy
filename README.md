@@ -32,6 +32,7 @@ At `execute_at`, Schedy POSTs your payload to the URL, retries on failure, and k
 
 Also there when you need it: HMAC request signing, idempotency keys, online backup/restore, and an SSRF egress guard.
 Full reference lives at **[schedy.mintlify.site](https://schedy.mintlify.site)**.
+The whole HTTP API is also described by a machine-readable [OpenAPI spec](openapi.yaml) - point your codegen, Postman, or Insomnia at it instead of hand-writing a client.
 
 ## What it deliberately isn't
 

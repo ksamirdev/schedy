@@ -1,0 +1,669 @@
+openapi: 3.1.0
+info:
+  title: Schedy
+  version: 1.0.0
+  summary: Self-hostable HTTP task scheduler.
+  description: >-
+    Schedy is a self-hostable HTTP task scheduler written in Go. Schedule an
+    HTTP request to be delivered to any URL at a future time, with optional
+    retries, fixed or exponential backoff, and interval-based recurrence.
+
+
+    Authentication is via an API key sent in the `X-API-Key` header. The key is
+    enforced only when the server is started with the `SCHEDY_API_KEY`
+    environment variable set; when it is unset the server accepts anonymous
+    requests, but the security scheme still logically applies to the `/tasks`
+    and `/admin` routes. A request missing a required key returns `401`; a
+    request carrying an invalid key returns `403`.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+externalDocs:
+  description: Schedy documentation
+  url: https://schedy.mintlify.site
+servers:
+  - url: http://localhost:8080
+    description: Local Schedy instance
+tags:
+  - name: Tasks
+    description: Create, inspect, update, cancel, and bulk-delete scheduled tasks.
+  - name: System
+    description: Liveness and readiness probes for orchestration and load balancers.
+  - name: Admin
+    description: Administrative operations such as streaming a database backup.
+paths:
+  /tasks:
+    post:
+      tags:
+        - Tasks
+      operationId: createTask
+      summary: Schedule a new task
+      description: >-
+        Schedule a new HTTP task for a future time. The `execute_at` timestamp
+        must be in the future. Supplying an optional `Idempotency-Key` request
+        header makes the create idempotent: a repeat of a request whose key
+        already matches a pending task returns that existing task with a `200`
+        instead of creating a new one. Without a key, an identical schedule
+        (same `url` and `execute_at` within one second) is treated as a
+        duplicate.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >-
+            Caller-supplied key that makes creation idempotent. A repeat request
+            with the same key returns the previously created pending task.
+          schema:
+            type: string
+          example: reminder-42-20300101
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/taskRequest'
+            example:
+              url: https://api.example.com/webhooks/reminder
+              method: POST
+              headers:
+                Content-Type: application/json
+                X-Source: schedy
+              payload:
+                message: Time to stand up
+                user_id: 42
+              execute_at: "2030-01-01T09:00:00Z"
+              retries: 3
+              retry_interval: 5000
+              retry_mode: exponential
+              schedule: "24h"
+      responses:
+        '201':
+          description: Task created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+              example:
+                id: d290f1ee-6c54-4b01-90e6-d701748f0851
+                idempotency_key: reminder-42-20300101
+                url: https://api.example.com/webhooks/reminder
+                method: POST
+                execute_at: "2030-01-01T09:00:00Z"
+                headers:
+                  Content-Type: application/json
+                  X-Source: schedy
+                payload:
+                  message: Time to stand up
+                  user_id: 42
+                retries: 3
+                retry_interval: 5000
+                retry_mode: exponential
+                schedule: "24h"
+                status: pending
+        '200':
+          description: >-
+            An idempotent or duplicate match was found; the existing pending
+            task is returned unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+              example:
+                id: d290f1ee-6c54-4b01-90e6-d701748f0851
+                idempotency_key: reminder-42-20300101
+                url: https://api.example.com/webhooks/reminder
+                method: POST
+                execute_at: "2030-01-01T09:00:00Z"
+                headers:
+                  Content-Type: application/json
+                  X-Source: schedy
+                payload:
+                  message: Time to stand up
+                  user_id: 42
+                retries: 3
+                retry_interval: 5000
+                retry_mode: exponential
+                schedule: "24h"
+                status: pending
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    get:
+      tags:
+        - Tasks
+      operationId: listTasks
+      summary: List tasks
+      description: List scheduled tasks, optionally filtered by lifecycle status.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Filter tasks by lifecycle status.
+          schema:
+            type: string
+            enum:
+              - pending
+              - running
+              - succeeded
+              - failed
+              - cancelled
+      responses:
+        '200':
+          description: The list of tasks matching the filter.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+              example:
+                - id: d290f1ee-6c54-4b01-90e6-d701748f0851
+                  url: https://api.example.com/webhooks/reminder
+                  method: POST
+                  execute_at: "2030-01-01T09:00:00Z"
+                  headers:
+                    X-Source: schedy
+                  payload:
+                    message: Time to stand up
+                  retries: 3
+                  retry_interval: 5000
+                  retry_mode: exponential
+                  status: pending
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    delete:
+      tags:
+        - Tasks
+      operationId: deleteTasks
+      summary: Bulk-delete tasks
+      description: >-
+        Delete tasks matching one or more filters. At least one of `url`,
+        `before`, or `after` must be supplied, otherwise the request is
+        rejected with `400`.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: url
+          in: query
+          required: false
+          description: Delete tasks whose target URL matches this value.
+          schema:
+            type: string
+        - name: before
+          in: query
+          required: false
+          description: Delete tasks scheduled before this RFC3339 timestamp.
+          schema:
+            type: string
+            format: date-time
+        - name: after
+          in: query
+          required: false
+          description: Delete tasks scheduled after this RFC3339 timestamp.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: The number of tasks deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkDeleteResponse'
+              example:
+                deleted: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /tasks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Unique identifier of the task.
+        schema:
+          type: string
+        example: d290f1ee-6c54-4b01-90e6-d701748f0851
+    get:
+      tags:
+        - Tasks
+      operationId: getTask
+      summary: Get a task by ID
+      description: Retrieve a single task, including its attempt history.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: The requested task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    put:
+      tags:
+        - Tasks
+      operationId: updateTask
+      summary: Update a pending task
+      description: >-
+        Replace the client-owned fields of a task while keeping its ID. Only
+        tasks in the `pending` state are mutable; updating a task in any other
+        state returns `409`. Server-owned state (status, attempts, finished_at)
+        is preserved.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/taskRequest'
+            example:
+              url: https://api.example.com/webhooks/reminder
+              method: POST
+              headers:
+                X-Source: schedy
+              payload:
+                message: Time to stand up (rescheduled)
+              execute_at: "2030-01-01T10:00:00Z"
+              retries: 5
+              retry_interval: 3000
+              retry_mode: fixed
+      responses:
+        '200':
+          description: The updated task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    delete:
+      tags:
+        - Tasks
+      operationId: cancelTask
+      summary: Cancel a task
+      description: >-
+        Cancel a task by ID. Non-terminal tasks are soft-cancelled (marked
+        `cancelled` and retained in history); already-terminal tasks are a
+        no-op. Returns no content on success.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '204':
+          description: The task was cancelled (or was already terminal). No content.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /admin/backup:
+    get:
+      tags:
+        - Admin
+      operationId: downloadBackup
+      summary: Download a database backup
+      description: >-
+        Stream an online snapshot of the entire BadgerDB store as a binary
+        download. The snapshot can later be restored offline with
+        `schedy restore <backup-file>`.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: A binary BadgerDB snapshot stream.
+          headers:
+            Content-Disposition:
+              description: Attachment filename for the downloaded snapshot.
+              schema:
+                type: string
+              example: attachment; filename="schedy-backup.badger"
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /healthz:
+    get:
+      tags:
+        - System
+      operationId: healthCheck
+      summary: Liveness probe
+      description: Liveness probe. Always returns 200 while the process is running.
+      security: []
+      responses:
+        '200':
+          description: The service is alive.
+  /readyz:
+    get:
+      tags:
+        - System
+      operationId: readinessCheck
+      summary: Readiness probe
+      description: >-
+        Readiness probe. Returns 200 when the database is accessible, or 503
+        when it is not ready to serve traffic.
+      security: []
+      responses:
+        '200':
+          description: The service is ready to serve traffic.
+        '503':
+          description: The service is not ready; the datastore is unavailable.
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        API key sent in the `X-API-Key` header. Enforced only when the server
+        is started with the `SCHEDY_API_KEY` environment variable set; when
+        unset the server accepts anonymous requests but the scheme still applies
+        to these routes. A missing key returns `401`; an invalid key returns
+        `403`.
+  responses:
+    BadRequest:
+      description: >-
+        The request failed validation - for example a missing `url`, an invalid
+        `method`, a malformed or past `execute_at`, an invalid `retry_mode`, an
+        invalid `schedule`, an unparseable time filter, or a bulk delete with no
+        filter. The body is a plain-text reason.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: "url is required\n"
+    Unauthorized:
+      description: An API key is required but was missing from the `X-API-Key` header.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: "missing API key\n"
+    Forbidden:
+      description: The supplied `X-API-Key` is invalid.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: "invalid API key\n"
+    NotFound:
+      description: No task exists with the given ID.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: "task not found\n"
+    Conflict:
+      description: The task is not in the `pending` state and therefore cannot be updated.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: "only pending tasks can be updated\n"
+    ServerError:
+      description: An unexpected server or storage error occurred.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: "could not save task\n"
+  schemas:
+    taskRequest:
+      type: object
+      description: >-
+        The client-owned shape of a task, shared by create and update.
+        Server-owned state (id, status, attempts, finished_at) is not accepted.
+      required:
+        - url
+        - execute_at
+      properties:
+        url:
+          type: string
+          description: Absolute URL the scheduled HTTP request is delivered to.
+          example: https://api.example.com/webhooks/reminder
+        execute_at:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 timestamp for when the task should fire. Must be in the
+            future at the time of the request.
+          example: "2030-01-01T09:00:00Z"
+        method:
+          type: string
+          enum:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - HEAD
+          default: POST
+          description: HTTP verb used to deliver the task. Case-insensitive; defaults to POST.
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Custom HTTP headers sent with the delivered request.
+        payload:
+          description: >-
+            Arbitrary request payload delivered as the body. May be any JSON
+            value - object, array, string, number, boolean, or null.
+        retries:
+          type: integer
+          default: 0
+          description: Number of retries attempted after the first delivery fails.
+        retry_interval:
+          type: integer
+          default: 2000
+          description: Base delay between retries, in milliseconds.
+        retry_mode:
+          type: string
+          enum:
+            - fixed
+            - exponential
+          default: fixed
+          description: >-
+            How the delay between retries is computed. `fixed` waits
+            `retry_interval` between every attempt; `exponential` backs off with
+            full jitter.
+        schedule:
+          type: string
+          description: >-
+            Optional Go duration string (e.g. "15m", "2h") that makes the task
+            recurring - after each fire a fresh task is enqueued at
+            fire_time + schedule. Must be positive. Interval-based only; cron
+            expressions are not supported.
+          example: "24h"
+    Task:
+      type: object
+      description: A scheduled task together with its current execution state.
+      required:
+        - id
+        - url
+        - method
+        - execute_at
+        - headers
+        - payload
+        - retries
+        - retry_interval
+        - retry_mode
+        - status
+      properties:
+        id:
+          type: string
+          description: Server-generated unique identifier (UUID).
+        idempotency_key:
+          type: string
+          description: >-
+            The `Idempotency-Key` the task was created with, if any. Set once at
+            creation and never changed.
+        url:
+          type: string
+          description: Absolute URL the request is delivered to.
+        method:
+          type: string
+          enum:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - HEAD
+          description: HTTP verb used to deliver the task.
+        execute_at:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp for when the task fires.
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Custom HTTP headers sent with the delivered request.
+        payload:
+          description: >-
+            Arbitrary payload delivered as the request body. May be any JSON
+            value - object, array, string, number, boolean, or null.
+        retries:
+          type: integer
+          description: Number of retries attempted after the first delivery fails.
+        retry_interval:
+          type: integer
+          description: Base delay between retries, in milliseconds.
+        retry_mode:
+          type: string
+          enum:
+            - fixed
+            - exponential
+          description: How the delay between retries is computed.
+        schedule:
+          type: string
+          description: >-
+            Go duration for recurrence, present only when the task is recurring.
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - succeeded
+            - failed
+            - cancelled
+          description: The lifecycle state of the task. Exactly one at any time.
+        attempts:
+          type: array
+          description: The delivery attempts fired so far, present once any have run.
+          items:
+            $ref: '#/components/schemas/Attempt'
+        finished_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+          description: >-
+            When the task reached a terminal state. Null or absent while the
+            task is not yet terminal.
+      example:
+        id: d290f1ee-6c54-4b01-90e6-d701748f0851
+        idempotency_key: reminder-42-20300101
+        url: https://api.example.com/webhooks/reminder
+        method: POST
+        execute_at: "2030-01-01T09:00:00Z"
+        headers:
+          X-Source: schedy
+        payload:
+          message: Time to stand up
+        retries: 3
+        retry_interval: 5000
+        retry_mode: exponential
+        status: succeeded
+        attempts:
+          - n: 1
+            fired_at: "2030-01-01T09:00:01Z"
+            status_code: 200
+            duration_ms: 142
+        finished_at: "2030-01-01T09:00:01Z"
+    Attempt:
+      type: object
+      description: A single delivery attempt against the task's URL.
+      required:
+        - n
+        - fired_at
+        - status_code
+        - duration_ms
+      properties:
+        n:
+          type: integer
+          description: 1-based attempt number.
+        fired_at:
+          type: string
+          format: date-time
+          description: When the request went out.
+        status_code:
+          type: integer
+          description: The HTTP status returned; 0 on a transport error.
+        error:
+          type: string
+          description: Transport or non-2xx error description, if any.
+        duration_ms:
+          type: integer
+          format: int64
+          description: Round-trip time in milliseconds.
+        response_body:
+          type: string
+          description: >-
+            The first ~2KB of the response body, captured only on failed
+            (non-2xx) attempts to explain the failure.
+        response_body_truncated:
+          type: boolean
+          description: True if `response_body` was cut at the capture cap.
+    BulkDeleteResponse:
+      type: object
+      description: The result of a bulk delete.
+      required:
+        - deleted
+      properties:
+        deleted:
+          type: integer
+          description: The number of tasks deleted.
