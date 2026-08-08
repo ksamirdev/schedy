@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,7 +83,7 @@ func TestBackupAndRestore(t *testing.T) {
 		require.NoError(t, err)
 		defer dst.db.Close()
 
-		all, err := dst.ListTasks("")
+		all, _, err := dst.ListTasks("", "", 0)
 		require.NoError(t, err)
 		assert.Len(t, all, 2)
 
@@ -182,11 +183,11 @@ func TestStatusLifecycle(t *testing.T) {
 	assert.Equal(t, StatusSucceeded, got.Status)
 	assert.Len(t, got.Attempts, 1)
 
-	succeeded, err := store.ListTasks(string(StatusSucceeded))
+	succeeded, _, err := store.ListTasks(string(StatusSucceeded), "", 0)
 	require.NoError(t, err)
 	assert.Len(t, succeeded, 1)
 
-	pending, err := store.ListTasks(string(StatusPending))
+	pending, _, err := store.ListTasks(string(StatusPending), "", 0)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 }
@@ -441,4 +442,110 @@ func TestDeleteTasksNoMatches(t *testing.T) {
 	// Verify task still exists
 	retrieved, _ := store.GetTask(task.ID)
 	assert.NotNil(t, retrieved)
+}
+
+// Paging must walk the whole store exactly once - no row returned twice, none
+// skipped - and it must stay correct across the seams: a page boundary that
+// lands exactly on the last row, a cursor whose row was deleted mid-walk, and a
+// cursor pointed at a different status partition than the query asks for.
+func TestListTasksPagination(t *testing.T) {
+	store, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	const total = 25
+	for i := 0; i < total; i++ {
+		require.NoError(t, store.Save(Task{
+			ID:        fmt.Sprintf("t%02d", i),
+			URL:       "http://example.com",
+			ExecuteAt: now.Add(time.Duration(i) * time.Minute),
+		}))
+	}
+
+	// walk pages the whole store at the given size and returns the ids in order.
+	walk := func(t *testing.T, limit int) []string {
+		t.Helper()
+		var ids []string
+		cursor := ""
+		for pages := 0; ; pages++ {
+			require.Less(t, pages, total+2, "paging failed to terminate")
+
+			page, next, err := store.ListTasks("", cursor, limit)
+			require.NoError(t, err)
+			for _, task := range page {
+				ids = append(ids, task.ID)
+			}
+			if next == "" {
+				break
+			}
+			require.NotEmpty(t, page, "a cursor was handed back for an empty page")
+			cursor = next
+		}
+		return ids
+	}
+
+	var want []string
+	for i := 0; i < total; i++ {
+		want = append(want, fmt.Sprintf("t%02d", i))
+	}
+
+	// 25 rows over sizes that divide evenly (5), leave a remainder (7), take one
+	// at a time, and exceed the total in a single page.
+	for _, limit := range []int{1, 5, 7, total, total + 10} {
+		t.Run(fmt.Sprintf("limit %d covers every task once", limit), func(t *testing.T) {
+			assert.Equal(t, want, walk(t, limit))
+		})
+	}
+
+	t.Run("limit defaults and clamps", func(t *testing.T) {
+		page, _, err := store.ListTasks("", "", 0)
+		require.NoError(t, err)
+		assert.Len(t, page, total, "<=0 means the default page size, not zero rows")
+
+		page, _, err = store.ListTasks("", "", MaxPageSize+1)
+		require.NoError(t, err)
+		assert.Len(t, page, total, "an over-large limit clamps rather than erroring")
+	})
+
+	t.Run("a cursor survives its own row being deleted", func(t *testing.T) {
+		first, next, err := store.ListTasks("", "", 5)
+		require.NoError(t, err)
+		require.NotEmpty(t, next)
+		require.NoError(t, store.Delete(first[len(first)-1].ID)) // the cursor row itself
+
+		page, _, err := store.ListTasks("", next, 5)
+		require.NoError(t, err)
+		require.NotEmpty(t, page)
+		assert.Equal(t, "t05", page[0].ID, "the page resumes after the deleted cursor")
+
+		require.NoError(t, store.Save(first[len(first)-1])) // restore for later subtests
+	})
+
+	t.Run("rejects a malformed cursor", func(t *testing.T) {
+		_, _, err := store.ListTasks("", "not-base64!!", 5)
+		assert.ErrorIs(t, err, ErrInvalidCursor)
+	})
+
+	t.Run("rejects a cursor from another status partition", func(t *testing.T) {
+		_, next, err := store.ListTasks(string(StatusPending), "", 5)
+		require.NoError(t, err)
+		require.NotEmpty(t, next)
+
+		// Same cursor, different status: paging on would walk the wrong keyspace.
+		_, _, err = store.ListTasks(string(StatusSucceeded), next, 5)
+		assert.ErrorIs(t, err, ErrInvalidCursor)
+	})
+
+	t.Run("a status filter pages only its own partition", func(t *testing.T) {
+		done, err := store.GetTask("t00")
+		require.NoError(t, err)
+		done.Status = StatusSucceeded
+		require.NoError(t, store.Update(*done))
+
+		succeeded, next, err := store.ListTasks(string(StatusSucceeded), "", 1)
+		require.NoError(t, err)
+		assert.Empty(t, next, "one row, one page")
+		require.Len(t, succeeded, 1)
+		assert.Equal(t, "t00", succeeded[0].ID)
+	})
 }

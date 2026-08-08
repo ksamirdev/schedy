@@ -13,6 +13,15 @@ const (
 	StatusCancelled TaskStatus = "cancelled" // user deleted before terminal
 )
 
+// Valid reports whether s is a recognised status.
+func (s TaskStatus) Valid() bool {
+	switch s {
+	case StatusPending, StatusRunning, StatusSucceeded, StatusFailed, StatusCancelled:
+		return true
+	}
+	return false
+}
+
 // IsTerminal reports whether the status is a final, retained-then-purged state.
 func (s TaskStatus) IsTerminal() bool {
 	return s == StatusSucceeded || s == StatusFailed || s == StatusCancelled

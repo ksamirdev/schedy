@@ -140,7 +140,12 @@ paths:
         - Tasks
       operationId: listTasks
       summary: List tasks
-      description: List scheduled tasks, optionally filtered by lifecycle status.
+      description: >-
+        List one page of scheduled tasks, optionally filtered by lifecycle
+        status. Results are paginated: read `next_cursor` from the response and
+        pass it back as `cursor` to fetch the following page, repeating while
+        `has_more` is true. The cursor is opaque - do not construct or parse it -
+        and it is only valid for the same `status` filter that produced it.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -156,28 +161,48 @@ paths:
               - succeeded
               - failed
               - cancelled
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of tasks to return in this page.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: cursor
+          in: query
+          required: false
+          description: >-
+            Opaque cursor from a previous response's `next_cursor`. Omit for the
+            first page.
+          schema:
+            type: string
       responses:
         '200':
-          description: The list of tasks matching the filter.
+          description: One page of tasks matching the filter.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Task'
+                $ref: '#/components/schemas/TaskPage'
               example:
-                - id: d290f1ee-6c54-4b01-90e6-d701748f0851
-                  url: https://api.example.com/webhooks/reminder
-                  method: POST
-                  execute_at: "2030-01-01T09:00:00Z"
-                  headers:
-                    X-Source: schedy
-                  payload:
-                    message: Time to stand up
-                  retries: 3
-                  retry_interval: 5000
-                  retry_mode: exponential
-                  status: pending
+                tasks:
+                  - id: d290f1ee-6c54-4b01-90e6-d701748f0851
+                    url: https://api.example.com/webhooks/reminder
+                    method: POST
+                    execute_at: "2030-01-01T09:00:00Z"
+                    headers:
+                      X-Source: schedy
+                    payload:
+                      message: Time to stand up
+                    retries: 3
+                    retry_interval: 5000
+                    retry_mode: exponential
+                    status: pending
+                next_cursor: dGFzazpwZW5kaW5nOjAwMDAwMDAxODkzNDgzMjAwOmQyOTBmMWVl
+                has_more: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -451,6 +476,26 @@ components:
             type: string
           example: "could not save task\n"
   schemas:
+    TaskPage:
+      type: object
+      description: One page of a task listing.
+      required:
+        - tasks
+        - has_more
+      properties:
+        tasks:
+          type: array
+          description: The tasks in this page. Empty on an exhausted or unmatched filter.
+          items:
+            $ref: '#/components/schemas/Task'
+        next_cursor:
+          type: string
+          description: >-
+            Opaque cursor to pass as `cursor` for the next page. Absent on the
+            last page.
+        has_more:
+          type: boolean
+          description: Whether a further page exists.
     taskRequest:
       type: object
       description: >-

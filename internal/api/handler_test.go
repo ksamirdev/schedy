@@ -2,11 +2,13 @@ package api
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -70,15 +72,48 @@ func (m *mockStore) GetTask(id string) (*scheduler.Task, error) {
 	return nil, nil
 }
 
-func (m *mockStore) ListTasks(status string) ([]scheduler.Task, error) {
-	var tasks []scheduler.Task
-	for _, task := range m.tasks {
+// ListTasks pages over the map in id order. The real store pages in key order;
+// the mock only needs a stable order and the same cursor contract.
+func (m *mockStore) ListTasks(status, cursor string, limit int) ([]scheduler.Task, string, error) {
+	if limit <= 0 {
+		limit = scheduler.DefaultPageSize
+	}
+	if limit > scheduler.MaxPageSize {
+		limit = scheduler.MaxPageSize
+	}
+
+	start := ""
+	if cursor != "" {
+		k, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil {
+			return nil, "", scheduler.ErrInvalidCursor
+		}
+		start = string(k)
+	}
+
+	var ids []string
+	for id, task := range m.tasks {
 		if status != "" && string(task.Status) != status {
 			continue
 		}
-		tasks = append(tasks, task)
+		if cursor != "" && id <= start {
+			continue
+		}
+		ids = append(ids, id)
 	}
-	return tasks, nil
+	sort.Strings(ids)
+
+	next := ""
+	if len(ids) > limit {
+		next = base64.RawURLEncoding.EncodeToString([]byte(ids[limit-1]))
+		ids = ids[:limit]
+	}
+
+	var tasks []scheduler.Task
+	for _, id := range ids {
+		tasks = append(tasks, m.tasks[id])
+	}
+	return tasks, next, nil
 }
 
 func (m *mockStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
@@ -306,19 +341,75 @@ func TestListTasksHandler(t *testing.T) {
 	store.Save(task1)
 	store.Save(task2)
 
-	t.Run("successful list", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	// list issues GET /tasks?query and decodes the page envelope.
+	list := func(t *testing.T, query string) (*httptest.ResponseRecorder, taskPage) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/tasks"+query, nil)
 		req.Header.Set("X-API-Key", "test-api-key")
 		w := httptest.NewRecorder()
-
 		handler.ListTasks(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
+		var page taskPage
+		if w.Code == http.StatusOK {
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &page))
+		}
+		return w, page
+	}
 
-		var resp []scheduler.Task
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		assert.Len(t, resp, 2)
+	t.Run("successful list", func(t *testing.T) {
+		w, page := list(t, "")
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Len(t, page.Tasks, 2)
+		assert.False(t, page.HasMore)
+		assert.Empty(t, page.NextCursor, "a complete page hands back no cursor")
+	})
+
+	t.Run("an empty listing encodes as [] not null", func(t *testing.T) {
+		w, _ := list(t, "?status=cancelled")
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Body.String(), `"tasks":[]`)
+	})
+
+	t.Run("paging walks every task exactly once", func(t *testing.T) {
+		seen := map[string]bool{}
+		query := "?limit=1"
+		for pages := 0; ; pages++ {
+			require.Less(t, pages, 10, "paging failed to terminate")
+
+			w, page := list(t, query)
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Len(t, page.Tasks, 1)
+
+			for _, task := range page.Tasks {
+				require.False(t, seen[task.ID], "task %s returned on two pages", task.ID)
+				seen[task.ID] = true
+			}
+			if !page.HasMore {
+				assert.Empty(t, page.NextCursor)
+				break
+			}
+			require.NotEmpty(t, page.NextCursor, "has_more with no cursor strands the client")
+			query = "?limit=1&cursor=" + url.QueryEscape(page.NextCursor)
+		}
+		assert.Equal(t, map[string]bool{"task1": true, "task2": true}, seen)
+	})
+
+	t.Run("rejects bad paging input", func(t *testing.T) {
+		for name, query := range map[string]string{
+			"unknown status":  "?status=bogus",
+			"zero limit":      "?limit=0",
+			"negative limit":  "?limit=-1",
+			"limit over max":  "?limit=1001",
+			"non-numeric":     "?limit=abc",
+			"unparsed cursor": "?cursor=not-base64!!",
+		} {
+			t.Run(name, func(t *testing.T) {
+				w, _ := list(t, query)
+				assert.Equal(t, http.StatusBadRequest, w.Code)
+			})
+		}
 	})
 
 	t.Run("missing API key", func(t *testing.T) {
@@ -561,7 +652,7 @@ func TestCreateTaskConcurrentIdempotency(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	all, err := handler.Store.ListTasks("")
+	all, _, err := handler.Store.ListTasks("", "", 0)
 	require.NoError(t, err)
 	assert.Len(t, all, 1, "concurrent same-key creates must persist exactly one task")
 
@@ -1091,8 +1182,8 @@ func (f *failingStore) GetTask(id string) (*scheduler.Task, error) {
 	return nil, nil
 }
 
-func (f *failingStore) ListTasks(status string) ([]scheduler.Task, error) {
-	return nil, errors.New("database connection failed")
+func (f *failingStore) ListTasks(status, cursor string, limit int) ([]scheduler.Task, string, error) {
+	return nil, "", errors.New("database connection failed")
 }
 
 func (f *failingStore) DeleteTasks(url string, before, after *time.Time) (int, error) {

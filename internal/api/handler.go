@@ -3,8 +3,11 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -160,24 +163,32 @@ func (h *Handler) loadTask(w http.ResponseWriter, r *http.Request) (*scheduler.T
 // Only pending tasks are considered. A task that has already run is history
 // rather than a live schedule, and history expires under SCHEDY_HISTORY_TTL,
 // which would otherwise make deduplication quietly depend on retention.
+//
+// ponytail: pages the whole pending partition on every create - O(pending) per
+// request. Add an idempotency-key index if create throughput makes it hot.
 func (h *Handler) findDuplicate(key, url string, executeAt time.Time) (*scheduler.Task, error) {
-	pending, err := h.Store.ListTasks(string(scheduler.StatusPending))
-	if err != nil {
-		return nil, err
-	}
-	for i := range pending {
-		task := &pending[i]
-		if key != "" {
-			if task.IdempotencyKey == key {
+	for cursor := ""; ; {
+		pending, next, err := h.Store.ListTasks(string(scheduler.StatusPending), cursor, scheduler.MaxPageSize)
+		if err != nil {
+			return nil, err
+		}
+		for i := range pending {
+			task := &pending[i]
+			if key != "" {
+				if task.IdempotencyKey == key {
+					return task, nil
+				}
+				continue
+			}
+			if task.URL == url && task.ExecuteAt.Sub(executeAt).Abs() < time.Second {
 				return task, nil
 			}
-			continue
 		}
-		if task.URL == url && task.ExecuteAt.Sub(executeAt).Abs() < time.Second {
-			return task, nil
+		if next == "" {
+			return nil, nil
 		}
+		cursor = next
 	}
-	return nil, nil
 }
 
 // CreateTask schedules a new task for a future time.
@@ -270,16 +281,50 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
-// ListTasks returns scheduled tasks, optionally filtered by ?status=.
+// taskPage is one page of a task listing. The listing is an envelope rather than
+// a bare array so a client can tell a full store from an exhausted one.
+type taskPage struct {
+	Tasks      []scheduler.Task `json:"tasks"`
+	NextCursor string           `json:"next_cursor,omitempty"`
+	HasMore    bool             `json:"has_more"`
+}
+
+// ListTasks returns one page of scheduled tasks, optionally filtered by
+// ?status=. Paging is by ?cursor= (opaque, from next_cursor) and ?limit=.
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
-	status := r.URL.Query().Get("status")
-	tasks, err := h.Store.ListTasks(status)
+	q := r.URL.Query()
+
+	status := q.Get("status")
+	if status != "" && !scheduler.TaskStatus(status).Valid() {
+		http.Error(w, "invalid status", http.StatusBadRequest)
+		return
+	}
+
+	limit := 0 // store applies the default
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > scheduler.MaxPageSize {
+			http.Error(w, fmt.Sprintf("invalid limit (1-%d)", scheduler.MaxPageSize), http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+
+	tasks, next, err := h.Store.ListTasks(status, q.Get("cursor"), limit)
+	if errors.Is(err, scheduler.ErrInvalidCursor) {
+		http.Error(w, "invalid cursor", http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		http.Error(w, "could not list tasks", http.StatusInternalServerError)
 		return
 	}
+	if tasks == nil {
+		tasks = []scheduler.Task{} // encode as [], never null
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tasks)
+	json.NewEncoder(w).Encode(taskPage{Tasks: tasks, NextCursor: next, HasMore: next != ""})
 }
 
 // GetTask returns a single task by ID
@@ -363,9 +408,11 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// Ready is a readiness probe. Returns 200 if database is accessible, 503 otherwise.
+// Ready is a readiness probe. Returns 200 if database is accessible, 503
+// otherwise. It reads a single row: a probe that runs every few seconds must not
+// scan the store.
 func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
-	_, err := h.Store.ListTasks("")
+	_, _, err := h.Store.ListTasks("", "", 1)
 	if err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
