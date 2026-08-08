@@ -98,7 +98,7 @@ func main() {
 	}))
 
 	addr := ":" + *port
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{Addr: addr, Handler: api.CORS(os.Getenv("SCHEDY_CORS_ORIGIN"), mux)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
