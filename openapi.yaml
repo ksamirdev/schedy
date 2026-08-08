@@ -672,6 +672,14 @@ components:
             How the delay between retries is computed. `fixed` waits
             `retry_interval` between every attempt; `exponential` backs off with
             full jitter.
+        timeout_ms:
+          type: integer
+          default: 0
+          maximum: 300000
+          description: >-
+            Timeout for a single delivery attempt, in milliseconds. 0 (or
+            absent) uses the server default of 10 seconds. Capped at 300000
+            (5 minutes).
         schedule:
           type: string
           description: >-
@@ -741,6 +749,11 @@ components:
             - fixed
             - exponential
           description: How the delay between retries is computed.
+        timeout_ms:
+          type: integer
+          description: >-
+            Timeout for a single delivery attempt, in milliseconds. Present
+            only when set; 0 or absent means the server default of 10 seconds.
         schedule:
           type: string
           description: >-

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -89,13 +90,23 @@ func newExecutor(guardPrivate bool) *Executor {
 		dialer.Control = blockPrivateDial
 		transport.DialContext = dialer.DialContext
 	}
+	// No client.Timeout: the per-attempt context deadline in Execute is the
+	// timeout, so a task's timeout_ms can exceed the 10s default.
 	return &Executor{
-		client: &http.Client{
-			Timeout:   10 * time.Second,
-			Transport: transport,
-		},
+		client:        &http.Client{Transport: transport},
 		signingSecret: os.Getenv("SCHEDY_SIGNING_SECRET"),
 	}
+}
+
+// defaultTimeout bounds a delivery attempt when the task sets no timeout_ms.
+const defaultTimeout = 10 * time.Second
+
+// timeout returns the deadline for one delivery attempt of task.
+func timeout(task scheduler.Task) time.Duration {
+	if task.TimeoutMs > 0 {
+		return time.Duration(task.TimeoutMs) * time.Millisecond
+	}
+	return defaultTimeout
 }
 
 // blockPrivateDial rejects any dial to a non-public address.
@@ -159,7 +170,10 @@ func (e *Executor) Execute(task scheduler.Task) Result {
 		body = bytes.NewBuffer(bodyBytes)
 	}
 
-	req, err := http.NewRequest(method, task.URL, body)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout(task))
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, method, task.URL, body)
 	if err != nil {
 		return Result{Err: err}
 	}

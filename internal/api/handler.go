@@ -79,6 +79,7 @@ type taskRequest struct {
 	RetryInterval *int                `json:"retry_interval"` // milliseconds
 	RetryMode     scheduler.RetryMode `json:"retry_mode"`     // fixed (default) or exponential
 	Schedule      string              `json:"schedule"`       // optional Go duration ("15m"); recurring re-enqueue
+	TimeoutMs     int                 `json:"timeout_ms"`     // per-attempt delivery timeout; 0 = server default
 }
 
 // decodeTaskRequest reads and validates a task body, applying defaults for the
@@ -120,6 +121,10 @@ func decodeTaskRequest(w http.ResponseWriter, r *http.Request) (taskRequest, tim
 	}
 	if !req.RetryMode.Valid() {
 		http.Error(w, "invalid retry_mode", http.StatusBadRequest)
+		return req, time.Time{}, false
+	}
+	if req.TimeoutMs < 0 || req.TimeoutMs > scheduler.MaxTimeoutMs {
+		http.Error(w, fmt.Sprintf("invalid timeout_ms (0-%d)", scheduler.MaxTimeoutMs), http.StatusBadRequest)
 		return req, time.Time{}, false
 	}
 	// Interval-only recurrence: a plain Go duration, never cron. ParseDuration
@@ -214,6 +219,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		Retries:        req.Retries,
 		RetryInterval:  *req.RetryInterval,
 		RetryMode:      req.RetryMode,
+		TimeoutMs:      req.TimeoutMs,
 		Schedule:       req.Schedule,
 		Status:         scheduler.StatusPending,
 	}
@@ -273,6 +279,7 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	task.Retries = req.Retries
 	task.RetryInterval = *req.RetryInterval
 	task.RetryMode = req.RetryMode
+	task.TimeoutMs = req.TimeoutMs
 	task.Schedule = req.Schedule
 
 	if err := h.Store.Update(*task); err != nil {
