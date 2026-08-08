@@ -69,7 +69,7 @@ func (f *fakeStore) GetTask(id string) (*scheduler.Task, error) {
 	return &task, nil
 }
 
-func (f *fakeStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
+func (f *fakeStore) DeleteTasks(url, status string, before, after *time.Time) (int, error) {
 	return 0, nil
 }
 

@@ -130,7 +130,7 @@ func (m *mockStore) Counts(now time.Time) (scheduler.Counts, error) {
 	return counts, nil
 }
 
-func (m *mockStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
+func (m *mockStore) DeleteTasks(url, status string, before, after *time.Time) (int, error) {
 	count := 0
 	toDelete := []string{}
 
@@ -1285,7 +1285,7 @@ func (f *failingStore) ListTasks(filter scheduler.ListFilter, cursor string, lim
 	return nil, "", errors.New("database connection failed")
 }
 
-func (f *failingStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
+func (f *failingStore) DeleteTasks(url, status string, before, after *time.Time) (int, error) {
 	return 0, nil
 }
 
@@ -1531,4 +1531,28 @@ func TestListTasksTimeFilterParams(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ListTasks(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestDeleteTasksStatusFilter(t *testing.T) {
+	t.Run("status alone is a valid filter", func(t *testing.T) {
+		store := newMockStore()
+		handler := New(store)
+
+		req := httptest.NewRequest(http.MethodDelete, "/tasks?status=failed", nil)
+		w := httptest.NewRecorder()
+		handler.DeleteTasks(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("invalid status rejected", func(t *testing.T) {
+		store := newMockStore()
+		handler := New(store)
+
+		req := httptest.NewRequest(http.MethodDelete, "/tasks?status=bogus", nil)
+		w := httptest.NewRecorder()
+		handler.DeleteTasks(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
 }

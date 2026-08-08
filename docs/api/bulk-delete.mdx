@@ -12,6 +12,7 @@ Hard-deletes tasks matching a filter (across all statuses). At least one filter 
 | Query param | Description                                        |
 | ----------- | -------------------------------------------------- |
 | `url`       | Delete tasks targeting this exact URL.             |
+| `status`    | Delete only tasks in this lifecycle status (`pending`, `running`, `succeeded`, `failed`, `cancelled`). |
 | `before`    | Delete tasks scheduled before this time (RFC3339). |
 | `after`     | Delete tasks scheduled after this time (RFC3339).  |
 
@@ -22,6 +23,10 @@ curl -X DELETE "http://localhost:8080/tasks?url=https://example.com/webhook" \
 
 # Combine filters
 curl -X DELETE "http://localhost:8080/tasks?url=https://example.com/webhook&before=2025-05-26T15:00:00Z" \
+  -H "X-API-Key: your-secret"
+
+# Purge every failed task
+curl -X DELETE "http://localhost:8080/tasks?status=failed" \
   -H "X-API-Key: your-secret"
 ```
 

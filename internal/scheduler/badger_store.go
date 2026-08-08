@@ -445,7 +445,7 @@ func (s *BadgerStore) RecoverRunning() error {
 // before: delete tasks scheduled before this time (optional)
 // after: delete tasks scheduled after this time (optional)
 // Returns the number of deleted tasks.
-func (s *BadgerStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
+func (s *BadgerStore) DeleteTasks(url, status string, before, after *time.Time) (int, error) {
 	var deleted int
 
 	err := s.db.Update(func(txn *badger.Txn) error {
@@ -466,6 +466,9 @@ func (s *BadgerStore) DeleteTasks(url string, before, after *time.Time) (int, er
 
 				matches := true
 				if url != "" && t.URL != url {
+					matches = false
+				}
+				if status != "" && string(t.Status) != status {
 					matches = false
 				}
 				if before != nil && !t.ExecuteAt.Before(*before) {

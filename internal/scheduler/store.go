@@ -52,7 +52,10 @@ type Store interface {
 	// Delete hard-removes a Task by id regardless of status.
 	Delete(id string) error
 	GetTask(id string) (*Task, error)
-	DeleteTasks(url string, before, after *time.Time) (int, error)
+	// DeleteTasks hard-removes every Task matching all given filters
+	// (url exact, status exact, ExecuteAt strictly before/after) and reports
+	// how many went. Empty/nil filters match everything.
+	DeleteTasks(url, status string, before, after *time.Time) (int, error)
 	// GetDueTasks returns at most limit pending Tasks whose ExecuteAt falls in
 	// [start, end], oldest first. limit is clamped to [1, MaxDueBatch],
 	// defaulting to MaxDueBatch when <= 0; a backlog larger than one batch is

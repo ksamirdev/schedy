@@ -481,6 +481,11 @@ func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteTasks(w http.ResponseWriter, r *http.Request) {
 	// Parse query params
 	url := r.URL.Query().Get("url")
+	status := r.URL.Query().Get("status")
+	if status != "" && !scheduler.TaskStatus(status).Valid() {
+		http.Error(w, "invalid status", http.StatusBadRequest)
+		return
+	}
 	beforeStr := r.URL.Query().Get("before")
 	afterStr := r.URL.Query().Get("after")
 
@@ -505,12 +510,12 @@ func (h *Handler) DeleteTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Require at least one filter
-	if url == "" && before == nil && after == nil {
-		http.Error(w, "at least one filter required (url, before, or after)", http.StatusBadRequest)
+	if url == "" && status == "" && before == nil && after == nil {
+		http.Error(w, "at least one filter required (url, status, before, or after)", http.StatusBadRequest)
 		return
 	}
 
-	deleted, err := h.Store.DeleteTasks(url, before, after)
+	deleted, err := h.Store.DeleteTasks(url, status, before, after)
 	if err != nil {
 		http.Error(w, "could not delete tasks", http.StatusInternalServerError)
 		return

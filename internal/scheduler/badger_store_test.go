@@ -311,7 +311,7 @@ func TestDeleteTasks(t *testing.T) {
 	}
 
 	t.Run("delete by URL", func(t *testing.T) {
-		count, err := store.DeleteTasks("http://example.com/webhook1", nil, nil)
+		count, err := store.DeleteTasks("http://example.com/webhook1", "", nil, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 2, count)
 
@@ -345,7 +345,7 @@ func TestDeleteTasksByTimeRange(t *testing.T) {
 
 	t.Run("delete before time", func(t *testing.T) {
 		before := now.Add(12 * time.Second)
-		count, err := store.DeleteTasks("", &before, nil)
+		count, err := store.DeleteTasks("", "", &before, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 2, count) // task1 and task2
 
@@ -377,7 +377,7 @@ func TestDeleteTasksAfterTime(t *testing.T) {
 	}
 
 	after := now.Add(12 * time.Second)
-	count, err := store.DeleteTasks("", nil, &after)
+	count, err := store.DeleteTasks("", "", nil, &after)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count) // only task3
 
@@ -409,7 +409,7 @@ func TestDeleteTasksCombinedFilters(t *testing.T) {
 	// Delete tasks with specific URL and in time range [8s, 18s]
 	before := now.Add(18 * time.Second)
 	after := now.Add(8 * time.Second)
-	count, err := store.DeleteTasks("http://example.com/webhook", &before, &after)
+	count, err := store.DeleteTasks("http://example.com/webhook", "", &before, &after)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count) // task2 and task3
 
@@ -435,7 +435,7 @@ func TestDeleteTasksNoMatches(t *testing.T) {
 	require.NoError(t, store.Save(task))
 
 	// Delete with non-matching URL
-	count, err := store.DeleteTasks("http://nonexistent.com/webhook", nil, nil)
+	count, err := store.DeleteTasks("http://nonexistent.com/webhook", "", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 
@@ -742,4 +742,28 @@ func TestListTasksTimeFilter(t *testing.T) {
 		assert.Empty(t, page)
 		assert.Empty(t, next)
 	})
+}
+
+// Status filter deletes only tasks in that lifecycle state; combined with a
+// URL filter both must match.
+func TestDeleteTasksByStatus(t *testing.T) {
+	store, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	pending := Task{ID: "p1", URL: "http://example.com/hook", ExecuteAt: now.Add(5 * time.Second)}
+	require.NoError(t, store.Save(pending))
+	failed := Task{ID: "f1", URL: "http://example.com/hook", ExecuteAt: now.Add(10 * time.Second)}
+	require.NoError(t, store.Save(failed))
+	failed.Status = StatusFailed
+	require.NoError(t, store.Update(failed))
+
+	count, err := store.DeleteTasks("", "failed", nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	got, _ := store.GetTask("f1")
+	assert.Nil(t, got)
+	got, _ = store.GetTask("p1")
+	assert.NotNil(t, got)
 }
