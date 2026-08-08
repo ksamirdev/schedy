@@ -220,3 +220,39 @@ func TestExecuteTimeout(t *testing.T) {
 		t.Fatalf("unexpected err with timeout_ms=5000: %v", res.Err)
 	}
 }
+
+// Verifies deliveries identify themselves: default User-Agent (task-overridable)
+// and a spoof-proof X-Schedy-Task-Id, absent on id-less internal requests.
+func TestExecuteIdentificationHeaders(t *testing.T) {
+	var hdr http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdr = r.Header.Clone()
+	}))
+	defer srv.Close()
+
+	e := NewExecutor()
+
+	e.Execute(scheduler.Task{ID: "task-123", URL: srv.URL})
+	if got := hdr.Get("User-Agent"); got != "schedy" {
+		t.Errorf("User-Agent = %q, want schedy", got)
+	}
+	if got := hdr.Get("X-Schedy-Task-Id"); got != "task-123" {
+		t.Errorf("X-Schedy-Task-Id = %q, want task-123", got)
+	}
+
+	e.Execute(scheduler.Task{ID: "task-123", URL: srv.URL, Headers: map[string]string{
+		"User-Agent":       "custom-agent",
+		"X-Schedy-Task-Id": "spoofed",
+	}})
+	if got := hdr.Get("User-Agent"); got != "custom-agent" {
+		t.Errorf("custom User-Agent = %q, want custom-agent", got)
+	}
+	if got := hdr.Get("X-Schedy-Task-Id"); got != "task-123" {
+		t.Errorf("spoofed X-Schedy-Task-Id = %q, want task-123", got)
+	}
+
+	e.Execute(scheduler.Task{URL: srv.URL, Headers: map[string]string{"X-Schedy-Task-Id": "spoofed"}})
+	if got := hdr.Get("X-Schedy-Task-Id"); got != "" {
+		t.Errorf("id-less request X-Schedy-Task-Id = %q, want absent", got)
+	}
+}

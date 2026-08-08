@@ -187,6 +187,20 @@ func (e *Executor) Execute(task scheduler.Task) Result {
 	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// Identify the sender unless the task set its own User-Agent (Go's default
+	// "Go-http-client/1.1" says nothing to a receiver's access log).
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", "schedy")
+	}
+	// The task id lets a receiver correlate a delivery with GET /tasks/{id}
+	// (attempt history, retries) without embedding the id in every payload. Set
+	// after custom headers so a task can't claim another task's id; absent on
+	// internal requests like the failure callback, which have no task id.
+	if task.ID != "" {
+		req.Header.Set("X-Schedy-Task-Id", task.ID)
+	} else {
+		req.Header.Del("X-Schedy-Task-Id")
+	}
 	// Sign after custom headers so a task's own headers can't spoof or clear the
 	// signature. Signing over "timestamp.body" (not the body alone) lets the
 	// receiver reject replays outside a freshness window.
