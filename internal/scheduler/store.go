@@ -26,6 +26,13 @@ type Counts struct {
 	Overdue int
 }
 
+// ListFilter selects which Tasks a listing returns. The zero value matches
+// everything.
+type ListFilter struct {
+	Status string // lifecycle status, "" = all
+	URL    string // exact delivery URL, "" = all
+}
+
 type Store interface {
 	// Save creates a new Task in the pending keyspace.
 	Save(task Task) error
@@ -38,11 +45,11 @@ type Store interface {
 	DeleteTasks(url string, before, after *time.Time) (int, error)
 	// GetDueTasks returns pending Tasks whose ExecuteAt falls in [start, end].
 	GetDueTasks(start, end time.Time) ([]Task, error)
-	// ListTasks returns one page of Tasks, optionally filtered by status
-	// ("" = all), starting after cursor ("" = first page). limit is clamped to
-	// [1, MaxPageSize], defaulting to DefaultPageSize when <= 0. The second
-	// return is the cursor for the next page, "" when the last page is reached.
-	ListTasks(status, cursor string, limit int) ([]Task, string, error)
+	// ListTasks returns one page of Tasks matching filter, starting after
+	// cursor ("" = first page). limit is clamped to [1, MaxPageSize],
+	// defaulting to DefaultPageSize when <= 0. The second return is the cursor
+	// for the next page, "" when the last page is reached.
+	ListTasks(filter ListFilter, cursor string, limit int) ([]Task, string, error)
 	// RecoverRunning re-queues Tasks stuck in running (e.g. after a crash)
 	// back to pending. Delivery is at-least-once.
 	RecoverRunning() error

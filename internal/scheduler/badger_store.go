@@ -211,7 +211,11 @@ func (s *BadgerStore) GetDueTasks(start, end time.Time) ([]Task, error) {
 	return tasks, err
 }
 
-// ListTasks returns one page of tasks, optionally filtered by status ("" = all).
+// ListTasks returns one page of tasks, optionally filtered by status ("" = all)
+// and exact URL ("" = all). The URL lives in the value, not the key, so a URL
+// filter decodes each candidate row; the page limit counts matches only.
+// ponytail: O(partition) when few rows match the URL - add a URL index if
+// filtered listing ever gets hot.
 //
 // Pagination is keyset, not offset: the cursor is the last key of the previous
 // page, so a page is a bounded Seek + scan rather than a full-store read, and
@@ -221,7 +225,7 @@ func (s *BadgerStore) GetDueTasks(start, end time.Time) ([]Task, error) {
 //
 // A cursor whose key has since been deleted is still valid: Seek lands on the
 // next key in order and the page continues from there.
-func (s *BadgerStore) ListTasks(status, cursor string, limit int) ([]Task, string, error) {
+func (s *BadgerStore) ListTasks(filter ListFilter, cursor string, limit int) ([]Task, string, error) {
 	if limit <= 0 {
 		limit = DefaultPageSize
 	}
@@ -230,8 +234,8 @@ func (s *BadgerStore) ListTasks(status, cursor string, limit int) ([]Task, strin
 	}
 
 	prefix := []byte(keyPrefix)
-	if status != "" {
-		prefix = []byte(statusPrefix(TaskStatus(status)))
+	if filter.Status != "" {
+		prefix = []byte(statusPrefix(TaskStatus(filter.Status)))
 	}
 
 	start := prefix
@@ -264,17 +268,20 @@ func (s *BadgerStore) ListTasks(status, cursor string, limit int) ([]Task, strin
 			if cursor != "" && bytes.Equal(key, start) {
 				continue
 			}
-			// One more row exists beyond this page, so hand back a cursor.
-			if len(tasks) == limit {
-				next = encodeCursor(lastKey)
-				return nil
-			}
 
 			var t Task
 			if err := item.Value(func(val []byte) error {
 				return json.Unmarshal(val, &t)
 			}); err != nil {
 				continue // skip an unreadable record rather than failing the page
+			}
+			if filter.URL != "" && t.URL != filter.URL {
+				continue
+			}
+			// One more matching row exists beyond this page, so hand back a cursor.
+			if len(tasks) == limit {
+				next = encodeCursor(lastKey)
+				return nil
 			}
 			tasks = append(tasks, t)
 			lastKey = key
