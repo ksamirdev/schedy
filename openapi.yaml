@@ -144,7 +144,8 @@ paths:
       summary: List tasks
       description: >-
         List one page of scheduled tasks, optionally filtered by lifecycle
-        status and exact delivery URL. Results are paginated: read `next_cursor`
+        status, exact delivery URL, and a due_before/due_after time window
+        (strict bounds on execute_at). Results are paginated: read `next_cursor`
         from the response and pass it back as `cursor` to fetch the following
         page, repeating while `has_more` is true. The cursor is opaque - do not
         construct or parse it - and it is only valid for the same `status`
@@ -170,6 +171,20 @@ paths:
           description: Filter tasks by exact delivery URL.
           schema:
             type: string
+        - name: due_before
+          in: query
+          required: false
+          description: Only tasks whose execute_at is strictly before this RFC3339 time.
+          schema:
+            type: string
+            format: date-time
+        - name: due_after
+          in: query
+          required: false
+          description: Only tasks whose execute_at is strictly after this RFC3339 time.
+          schema:
+            type: string
+            format: date-time
         - name: limit
           in: query
           required: false

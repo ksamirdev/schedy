@@ -1516,3 +1516,19 @@ func TestListTasksURLFilter(t *testing.T) {
 	require.Len(t, page.Tasks, 1)
 	assert.Equal(t, "a", page.Tasks[0].ID)
 }
+
+func TestListTasksTimeFilterParams(t *testing.T) {
+	handler := New(newMockStore())
+
+	for _, param := range []string{"due_before", "due_after"} {
+		req := httptest.NewRequest(http.MethodGet, "/tasks?"+param+"=not-a-time", nil)
+		w := httptest.NewRecorder()
+		handler.ListTasks(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code, param)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks?due_before=2030-01-01T00:00:00Z&due_after=2029-01-01T00:00:00Z", nil)
+	w := httptest.NewRecorder()
+	handler.ListTasks(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
