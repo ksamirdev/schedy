@@ -35,6 +35,9 @@ var (
 // limit - the visible cost of an outage, separate from delivery failures.
 var tasksSkipped atomic.Uint64
 
+// tasksReplayed counts finished tasks manually re-armed via the API.
+var tasksReplayed atomic.Uint64
+
 // inflight is the number of deliveries currently executing. Read against the
 // configured concurrency limit, it says whether the runner is saturated.
 var inflight atomic.Int64
@@ -74,6 +77,11 @@ func ObserveTaskFinished(ok bool) {
 // ObserveSkipped records a task retired without delivery for being too stale.
 func ObserveSkipped() {
 	tasksSkipped.Add(1)
+}
+
+// ObserveReplay records a finished task re-armed through the API.
+func ObserveReplay() {
+	tasksReplayed.Add(1)
 }
 
 // InflightAdd moves the in-flight delivery gauge by delta.
@@ -130,6 +138,9 @@ func Write(w io.Writer, s Snapshot) error {
 	b.header("schedy_tasks_skipped_total", "counter", "Tasks retired without delivery for exceeding SCHEDY_MAX_STALENESS.")
 	b.line("schedy_tasks_skipped_total", `reason="stale"`, float64(tasksSkipped.Load()))
 
+	b.header("schedy_tasks_replayed_total", "counter", "Finished tasks manually re-armed through the API.")
+	b.line("schedy_tasks_replayed_total", "", float64(tasksReplayed.Load()))
+
 	b.header("schedy_deliveries_inflight", "gauge", "Deliveries currently executing. Compare against SCHEDY_MAX_CONCURRENT_DELIVERIES to spot saturation.")
 	b.line("schedy_deliveries_inflight", "", float64(inflight.Load()))
 
@@ -146,6 +157,7 @@ func Reset() {
 	tasksSucceeded.Store(0)
 	tasksFailed.Store(0)
 	tasksSkipped.Store(0)
+	tasksReplayed.Store(0)
 	inflight.Store(0)
 	deliveryDuration.reset()
 	lateness.reset()

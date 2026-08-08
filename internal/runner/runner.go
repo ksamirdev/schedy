@@ -193,7 +193,10 @@ func (r *Runner) runOnce(start, end time.Time) {
 				log.Printf("mark running %s: %v", t.ID, err)
 			}
 
-			n := 0
+			// Continue the numbering rather than restarting it: a replayed
+			// task keeps its earlier attempts, and two attempts both called
+			// "n: 1" make the log unreadable at the moment it matters.
+			n := len(t.Attempts)
 			for {
 				n++
 				res := r.executor.Execute(t)

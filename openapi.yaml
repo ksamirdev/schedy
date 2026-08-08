@@ -360,6 +360,69 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ServerError'
+  /tasks/{id}/run:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Unique identifier of the task.
+        schema:
+          type: string
+        example: d290f1ee-6c54-4b01-90e6-d701748f0851
+    post:
+      tags:
+        - Tasks
+      operationId: replayTask
+      summary: Replay a task
+      description: >-
+        Re-arm a finished task: same id, back to `pending`, `execute_at` set to
+        now, picked up by the runner within a few seconds. The attempt log is
+        kept rather than cleared - the delivery that failed is the reason for
+        replaying - so a replay appends to it. `finished_at` is cleared and set
+        again when the replay finishes, and the task's retry budget applies
+        afresh. Only terminal tasks (failed, succeeded, cancelled) may be
+        replayed; a pending task is already scheduled and a running one is
+        mid-delivery, so re-arming either would race the runner. Note that
+        replaying a succeeded task delivers its payload a second time.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: The re-armed task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+              example:
+                id: d290f1ee-6c54-4b01-90e6-d701748f0851
+                url: https://api.example.com/webhooks/reminder
+                method: POST
+                execute_at: "2030-01-01T15:04:05Z"
+                headers:
+                  X-Source: schedy
+                payload:
+                  message: Time to stand up
+                retries: 3
+                retry_interval: 5000
+                retry_mode: exponential
+                status: pending
+                attempts:
+                  - n: 1
+                    fired_at: "2030-01-01T09:00:00Z"
+                    status_code: 500
+                    error: unexpected status 500
+                    duration_ms: 42
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            The task is pending or running, so it is not eligible for replay.
+        '500':
+          $ref: '#/components/responses/ServerError'
   /admin/backup:
     get:
       tags:
