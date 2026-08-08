@@ -183,7 +183,7 @@ func TestFailureCallback(t *testing.T) {
 
 		r := New(store, executor.NewExecutor(), time.Second)
 		r.onFailureURL = global.URL
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		select {
 		case <-taskHook:
