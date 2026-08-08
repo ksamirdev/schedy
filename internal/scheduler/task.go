@@ -2,6 +2,11 @@ package scheduler
 
 import "time"
 
+// MaxTimeoutMs caps a task's per-attempt delivery timeout at 5 minutes. An
+// unbounded timeout would let one slow endpoint pin a delivery goroutine
+// indefinitely.
+const MaxTimeoutMs = 300_000
+
 // TaskStatus is the lifecycle state of a Task. Exactly one at any time.
 type TaskStatus string
 
@@ -70,6 +75,9 @@ type Task struct {
 	Retries        int               `json:"retries"`
 	RetryInterval  int               `json:"retry_interval"` // milliseconds, base delay between retries
 	RetryMode      RetryMode         `json:"retry_mode"`     // fixed (default) or exponential
+	// TimeoutMs bounds a single delivery attempt, in milliseconds. 0 means the
+	// server default (10s). Capped at MaxTimeoutMs.
+	TimeoutMs int `json:"timeout_ms,omitempty"`
 	// Schedule, if set, makes the task recurring: after each fire a fresh
 	// one-shot task is enqueued at fire_time + Schedule. Parsed by stdlib
 	// time.ParseDuration ("15m", "2h"). Deliberately NOT cron - no calendar,

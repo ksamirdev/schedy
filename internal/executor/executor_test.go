@@ -201,3 +201,22 @@ func TestRetryAfterHint(t *testing.T) {
 		}
 	}
 }
+
+// Verifies timeout_ms bounds a single attempt: a task whose timeout is shorter
+// than the endpoint's response time fails, while a generous one succeeds.
+func TestExecuteTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	res := NewExecutor().Execute(scheduler.Task{URL: srv.URL, TimeoutMs: 20})
+	if res.Err == nil {
+		t.Fatal("expected timeout error with timeout_ms=20 against a 100ms endpoint")
+	}
+
+	res = NewExecutor().Execute(scheduler.Task{URL: srv.URL, TimeoutMs: 5000})
+	if res.Err != nil {
+		t.Fatalf("unexpected err with timeout_ms=5000: %v", res.Err)
+	}
+}
