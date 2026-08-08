@@ -111,7 +111,13 @@ func main() {
 
 	<-ctx.Done()
 	log.Println("Shutting down...")
-	srv.Shutdown(context.Background())
+	// Bounded drain: a background context would wait forever on one hung
+	// connection, turning SIGINT into a process that never exits.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
+	cancel()
 	<-gcDone
 	if err := store.Close(); err != nil {
 		log.Printf("close store: %v", err)
