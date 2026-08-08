@@ -396,11 +396,24 @@ paths:
         - System
       operationId: healthCheck
       summary: Liveness probe
-      description: Liveness probe. Always returns 200 while the process is running.
+      description: >-
+        Liveness probe. Always returns 200 while the process is running. The
+        body carries the running build's version.
       security: []
       responses:
         '200':
           description: The service is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: v0.9.0
   /readyz:
     get:
       tags:

@@ -11,12 +11,15 @@ Schedy provides two health endpoints for Kubernetes and container orchestration 
 GET /healthz
 ```
 
-Returns `200 OK` if the process is running. Used by Kubernetes `livenessProbe` to detect if the container should be restarted.
+Returns `200 OK` if the process is running, with the running build's version in the body.
+Used by Kubernetes `livenessProbe` to detect if the container should be restarted, and by operators to answer "what's deployed here?".
 
 ```bash
 curl http://localhost:8080/healthz
-# Returns: 200 OK (empty body)
+# {"status":"ok","version":"v0.9.0"}
 ```
+
+Dev builds report `"dev"`; `go install` builds report their module version.
 
 This endpoint always responds successfully as long as the process is running. No dependencies are checked.
 
