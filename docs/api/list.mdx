@@ -21,6 +21,23 @@ curl "http://localhost:8080/tasks?status=failed" -H "X-API-Key: your-secret"
 Valid `status` values: `pending`, `running`, `succeeded`, `failed`, `cancelled`.
 Anything else is a `400`.
 
+## Filters
+
+Filters compose; a task must match all of them.
+
+- `url` matches the exact delivery URL.
+- `due_before` / `due_after` bound `execute_at` (RFC3339, strict bounds - a task exactly at the boundary is excluded).
+
+```bash
+# Everything scheduled for the next hour
+curl "http://localhost:8080/tasks?status=pending&due_before=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ)" \
+  -H "X-API-Key: your-secret"
+
+# Failed deliveries to one endpoint
+curl "http://localhost:8080/tasks?status=failed&url=https://example.com/webhook" \
+  -H "X-API-Key: your-secret"
+```
+
 ## Response
 
 ```json
