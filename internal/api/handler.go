@@ -291,6 +291,41 @@ type taskPage struct {
 	HasMore    bool             `json:"has_more"`
 }
 
+// ReplayTask re-arms a finished task: same id, back to pending, due now.
+//
+// The task is re-armed rather than cloned so the id a caller already holds stays
+// valid, and its attempts are kept rather than cleared - the delivery that
+// failed is the reason anyone is replaying, so erasing it would destroy the
+// record at exactly the wrong moment. A replay therefore appends to the attempt
+// log rather than starting a fresh one.
+//
+// Only terminal tasks are replayable. A pending task is already scheduled and a
+// running one is mid-delivery; re-arming either would race the runner and risk a
+// double delivery.
+func (h *Handler) ReplayTask(w http.ResponseWriter, r *http.Request) {
+	task, ok := h.loadTask(w, r)
+	if !ok {
+		return
+	}
+	if !task.Status.IsTerminal() {
+		http.Error(w, "only finished tasks can be replayed", http.StatusConflict)
+		return
+	}
+
+	task.Status = scheduler.StatusPending
+	task.ExecuteAt = time.Now().UTC()
+	task.FinishedAt = nil
+
+	if err := h.Store.Update(*task); err != nil {
+		http.Error(w, "could not replay task", http.StatusInternalServerError)
+		return
+	}
+	metrics.ObserveReplay()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(task)
+}
+
 // ListTasks returns one page of scheduled tasks, optionally filtered by
 // ?status=. Paging is by ?cursor= (opaque, from next_cursor) and ?limit=.
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {

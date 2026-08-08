@@ -1,0 +1,80 @@
+---
+title: "Replay a task"
+description: "POST /tasks/{id}/run - re-arm a finished task to fire again now."
+---
+
+```
+POST /tasks/{id}/run
+```
+
+Re-arms a finished task: same id, back to `pending`, `execute_at` set to now.
+The runner picks it up on its next tick, within a few seconds.
+
+```bash
+curl -X POST http://localhost:8080/tasks/d290f1ee-6c54-4b01-90e6-d701748f0851/run \
+  -H "X-API-Key: your-secret"
+```
+
+Returns `200` with the re-armed task.
+
+```json
+{
+  "id": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "url": "https://api.example.com/webhooks/reminder",
+  "execute_at": "2030-01-01T15:04:05Z",
+  "status": "pending",
+  "attempts": [
+    { "n": 1, "status_code": 500, "error": "unexpected status 500" }
+  ]
+}
+```
+
+This is the recovery path for a task that failed against an endpoint you have since fixed, or one [skipped during an outage](/concepts/catch-up#staleness).
+Without it, the only way back is to rebuild the task by hand from its record.
+
+## What is preserved
+
+The **id stays the same**, so anything already holding it keeps working.
+
+The **attempt log is kept**, not cleared. The delivery that failed is the reason you are replaying, so erasing it would destroy the record at exactly the wrong moment. A replay appends to the log rather than starting a fresh one - `n` keeps counting up across replays.
+
+`finished_at` is cleared, and is set again when the replay finishes.
+
+<Note>
+  The task's `retries` budget applies afresh to the replay. A task configured with `retries: 3` that exhausted them gets three more.
+</Note>
+
+## Which tasks can be replayed
+
+| Status | Result |
+| --- | --- |
+| `failed` | Replayed. |
+| `succeeded` | Replayed - this is how you resend a delivery that arrived but was lost downstream. |
+| `cancelled` | Replayed - effectively an undo. |
+| `pending` | `409` - already scheduled. Use [update](/api/update) to change when it fires. |
+| `running` | `409` - mid-delivery. |
+
+Refusing `pending` and `running` is not a formality: re-arming a task the runner is already holding would race it and risk a double delivery.
+
+<Warning>
+  Replaying a `succeeded` task delivers its payload again. If the receiver is not idempotent - a payment capture, a "send email" webhook - it will happen twice. Check what you are replaying.
+</Warning>
+
+## Recurring tasks
+
+Replaying a task with a `schedule` fires it once now and then re-anchors the chain forward from that fire.
+It does not backfill the fires that were missed.
+
+## Bulk replay
+
+There isn't one.
+Replaying after a large outage means iterating the failures yourself:
+
+```bash
+curl -s "http://localhost:8080/tasks?status=failed&limit=500" -H "X-API-Key: your-secret" \
+  | jq -r '.tasks[].id' \
+  | xargs -P4 -I{} curl -s -X POST "http://localhost:8080/tasks/{}/run" -H "X-API-Key: your-secret" -o /dev/null
+```
+
+Deliberate: a bulk endpoint that re-fires thousands of tasks in one call is the same thundering herd that [catch-up controls](/concepts/catch-up) exist to prevent, and it would do it on purpose.
+Iterating leaves the pacing in your hands, and the concurrency cap still bounds what actually goes out.
