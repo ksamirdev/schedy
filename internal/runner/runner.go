@@ -43,6 +43,10 @@ type Runner struct {
 	// while. Schedy is single-process, so an in-memory claim is enough.
 	mu       sync.Mutex
 	inflight map[string]struct{}
+
+	// wg tracks in-flight delivery goroutines so shutdown can drain them
+	// instead of closing the store underneath a finalize Update.
+	wg sync.WaitGroup
 }
 
 func New(store scheduler.Store, executor *executor.Executor, interval time.Duration) *Runner {
@@ -96,19 +100,44 @@ func (r *Runner) release(id string) {
 	delete(r.inflight, id)
 }
 
+// Start runs the delivery loop until ctx is cancelled, then drains: goroutines
+// still waiting on their pre-fire timer or a delivery slot return immediately
+// (the task stays pending and is re-queued on the next start), and deliveries
+// already firing get up to drainTimeout to finish and record their outcome
+// before Start returns and the caller closes the store.
 func (r *Runner) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			r.ticker.Stop()
+			r.drain(drainTimeout)
 			return
 		case now := <-r.ticker.C():
-			r.runOnce(now, now.Add(r.interval))
+			r.runOnce(ctx, now, now.Add(r.interval))
 		}
 	}
 }
 
-func (r *Runner) runOnce(start, end time.Time) {
+// drainTimeout bounds how long shutdown waits for in-flight deliveries. Long
+// enough for a delivery plus a few retries; short enough that a supervisor's
+// own kill timeout doesn't fire first.
+// ponytail: retry sleeps are not ctx-aware, so a long exponential chain can
+// outlive this and lose its final status record (re-queued as running on next
+// start). Interrupt the retry sleep on ctx if that ever matters.
+const drainTimeout = 30 * time.Second
+
+// drain waits for in-flight delivery goroutines, giving up after timeout.
+func (r *Runner) drain(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() { r.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		slog.Warn("shutdown: gave up on in-flight deliveries", "timeout", timeout)
+	}
+}
+
+func (r *Runner) runOnce(ctx context.Context, start, end time.Time) {
 	// One bounded batch per tick. A backlog larger than the batch is drained
 	// over successive ticks, oldest first, rather than read in at once.
 	tasks, err := r.store.GetDueTasks(start, end, scheduler.MaxDueBatch)
@@ -122,7 +151,9 @@ func (r *Runner) runOnce(start, end time.Time) {
 		if !r.claim(task.ID) {
 			continue
 		}
+		r.wg.Add(1)
 		go func(t scheduler.Task, idx int) {
+			defer r.wg.Done()
 			defer r.release(t.ID)
 
 			taskTime := time.Until(t.ExecuteAt)
@@ -133,13 +164,24 @@ func (r *Runner) runOnce(start, end time.Time) {
 			timer := NewTimer(taskTime)
 			defer timer.Stop()
 
-			<-timer.C()
+			select {
+			case <-timer.C():
+			case <-ctx.Done():
+				// Not fired yet: leave the task pending for the next start.
+				return
+			}
 
 			// Wait for a delivery slot. Taken before the fire timestamp on
 			// purpose: time spent queued here is time the task is late, and
 			// hiding that would make saturation invisible in the one metric
-			// meant to show it.
-			r.sem <- struct{}{}
+			// meant to show it. Abort on shutdown: a task still queued here has
+			// not fired, so it stays pending for the next start instead of
+			// holding the drain hostage.
+			select {
+			case r.sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			metrics.InflightAdd(1)
 			defer func() {
 				metrics.InflightAdd(-1)

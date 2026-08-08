@@ -103,7 +103,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	go r.Start(ctx)
+	// Signal when the runner has returned - its drain of in-flight deliveries
+	// must finish before the store closes underneath them.
+	runnerDone := make(chan struct{})
+	go func() {
+		r.Start(ctx)
+		close(runnerDone)
+	}()
 
 	// Reclaim BadgerDB value-log garbage periodically. Signal when the loop has
 	// observed cancellation so shutdown can close the store without racing an
@@ -131,6 +137,7 @@ func main() {
 		slog.Error("shutdown", "error", err)
 	}
 	cancel()
+	<-runnerDone
 	<-gcDone
 	if err := store.Close(); err != nil {
 		slog.Error("close store", "error", err)

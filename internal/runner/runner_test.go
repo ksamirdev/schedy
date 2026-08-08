@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -140,7 +141,7 @@ func TestFailureCallback(t *testing.T) {
 
 		r := New(store, executor.NewExecutor(), time.Second)
 		r.onFailureURL = hook.URL
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		select {
 		case b := <-got:
@@ -173,7 +174,7 @@ func TestFailureCallback(t *testing.T) {
 
 		r := New(store, executor.NewExecutor(), time.Second)
 		r.onFailureURL = hook.URL
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		select {
 		case <-fired:
@@ -201,7 +202,7 @@ func TestRecurringReschedule(t *testing.T) {
 		}))
 
 		r := New(store, executor.NewExecutor(), time.Second)
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 		<-hits // original delivered
 
 		// The successor is a fresh, distinct, pending one-shot carrying the schedule.
@@ -230,7 +231,7 @@ func TestRecurringReschedule(t *testing.T) {
 		}))
 
 		r := New(store, executor.NewExecutor(), time.Second)
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 		<-hits
 
 		require.Eventually(t, func() bool {
@@ -260,7 +261,7 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 		require.NoError(t, store.Save(task))
 
 		r := New(store, executor.NewExecutor(), time.Second)
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		// Push the task an hour out while the runner still holds the stale copy.
 		moved := task
@@ -292,7 +293,7 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 		require.NoError(t, store.Save(task))
 
 		r := New(store, executor.NewExecutor(), time.Second)
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		// Same execute_at, different target.
 		edited := task
@@ -334,7 +335,7 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 		require.NoError(t, store.Save(task))
 
 		r := New(store, executor.NewExecutor(), time.Second)
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		// Arm retries that the stale copy does not have.
 		edited := task
@@ -363,7 +364,7 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 		require.NoError(t, store.Save(task))
 
 		r := New(store, executor.NewExecutor(), time.Second)
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		cancelled := task
 		cancelled.Status = scheduler.StatusCancelled
@@ -421,7 +422,7 @@ func TestConcurrencyIsBounded(t *testing.T) {
 
 	r := New(store, executor.NewExecutor(), time.Second)
 	r.sem = make(chan struct{}, limit)
-	r.runOnce(time.Now(), time.Now().Add(time.Second))
+	r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 	// Let the first wave saturate. Give the excess goroutines time to pile in
 	// too, so an unbounded runner is caught rather than merely slow.
@@ -471,11 +472,11 @@ func TestNoDoubleDeliveryAcrossTicks(t *testing.T) {
 	}))
 
 	r := New(store, executor.NewExecutor(), time.Second)
-	r.runOnce(time.Now(), time.Now().Add(time.Second))
+	r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 	require.Eventually(t, func() bool { return hits.Load() == 1 }, 2*time.Second, 10*time.Millisecond)
 
 	// Second tick while the first delivery is still in flight.
-	r.runOnce(time.Now(), time.Now().Add(time.Second))
+	r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 	time.Sleep(200 * time.Millisecond)
 	assert.EqualValues(t, 1, hits.Load(), "an in-flight task was picked up twice")
 
@@ -511,7 +512,7 @@ func TestMaxStaleness(t *testing.T) {
 		r := New(store, executor.NewExecutor(), time.Second)
 		r.maxStaleness = time.Hour
 		r.onFailureURL = hook.URL
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		require.Eventually(t, func() bool {
 			task, _ := store.GetTask("ancient")
@@ -546,7 +547,7 @@ func TestMaxStaleness(t *testing.T) {
 
 		r := New(store, executor.NewExecutor(), time.Second)
 		r.maxStaleness = time.Hour
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		select {
 		case <-hits:
@@ -567,7 +568,7 @@ func TestMaxStaleness(t *testing.T) {
 		}))
 
 		r := New(store, executor.NewExecutor(), time.Second) // maxStaleness unset
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		select {
 		case <-hits:
@@ -589,7 +590,7 @@ func TestMaxStaleness(t *testing.T) {
 
 		r := New(store, executor.NewExecutor(), time.Second)
 		r.maxStaleness = time.Minute
-		r.runOnce(time.Now(), time.Now().Add(time.Second))
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		require.Eventually(t, func() bool {
 			pending, _, _ := store.ListTasks(string(scheduler.StatusPending), "", 0)
@@ -622,7 +623,7 @@ func TestAttemptNumberingContinuesAfterReplay(t *testing.T) {
 	}))
 
 	r := New(store, executor.NewExecutor(), time.Second)
-	r.runOnce(time.Now(), time.Now().Add(time.Second))
+	r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 	<-hits
 
 	require.Eventually(t, func() bool {
@@ -633,4 +634,61 @@ func TestAttemptNumberingContinuesAfterReplay(t *testing.T) {
 	got, _ := store.GetTask("replayed")
 	require.Len(t, got.Attempts, 3, "the replay appends rather than replacing")
 	assert.Equal(t, 3, got.Attempts[2].N, "numbering continues across the replay")
+}
+
+func TestShutdownDrain(t *testing.T) {
+	t.Run("cancelled before fire leaves the task pending", func(t *testing.T) {
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "d1",
+			URL:       "http://example.com",
+			ExecuteAt: time.Now().Add(500 * time.Millisecond),
+			Status:    scheduler.StatusPending,
+		}))
+
+		r := New(store, executor.NewExecutor(), time.Second)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		r.runOnce(ctx, time.Now(), time.Now().Add(time.Second))
+
+		start := time.Now()
+		r.drain(2 * time.Second)
+		assert.Less(t, time.Since(start), time.Second, "drain must not wait out the pre-fire timer")
+
+		task, err := store.GetTask("d1")
+		require.NoError(t, err)
+		require.NotNil(t, task)
+		assert.Equal(t, scheduler.StatusPending, task.Status)
+		assert.Empty(t, task.Attempts)
+	})
+
+	t.Run("in-flight delivery records its outcome before drain returns", func(t *testing.T) {
+		release := make(chan struct{})
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			<-release
+		}))
+		t.Cleanup(target.Close)
+
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "d2",
+			URL:       target.URL,
+			ExecuteAt: time.Now(),
+			Status:    scheduler.StatusPending,
+		}))
+
+		r := New(store, executor.NewExecutor(), time.Second)
+		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
+
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			close(release)
+		}()
+		r.drain(5 * time.Second)
+
+		task, err := store.GetTask("d2")
+		require.NoError(t, err)
+		require.NotNil(t, task)
+		assert.Equal(t, scheduler.StatusSucceeded, task.Status)
+	})
 }
