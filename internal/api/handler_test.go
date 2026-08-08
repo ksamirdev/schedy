@@ -50,7 +50,7 @@ func (m *mockStore) RecoverRunning() error {
 	return nil
 }
 
-func (m *mockStore) GetDueTasks(start, end time.Time) ([]scheduler.Task, error) {
+func (m *mockStore) GetDueTasks(start, end time.Time, limit int) ([]scheduler.Task, error) {
 	var tasks []scheduler.Task
 	for _, task := range m.tasks {
 		if task.Status == scheduler.StatusPending && !task.ExecuteAt.After(end) {
@@ -1185,7 +1185,7 @@ func (f *failingStore) RecoverRunning() error {
 	return nil
 }
 
-func (f *failingStore) GetDueTasks(start, end time.Time) ([]scheduler.Task, error) {
+func (f *failingStore) GetDueTasks(start, end time.Time, limit int) ([]scheduler.Task, error) {
 	return nil, nil
 }
 

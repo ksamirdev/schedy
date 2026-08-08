@@ -129,12 +129,12 @@ func TestSaveAndGetTasks(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test GetDueTasks
-	tasks, err := store.GetDueTasks(now, now.Add(15*time.Second))
+	tasks, err := store.GetDueTasks(now, now.Add(15*time.Second), 0)
 	require.NoError(t, err)
 	assert.Len(t, tasks, 2)
 
 	// Test time range filtering
-	tasks, err = store.GetDueTasks(now, now.Add(7*time.Second))
+	tasks, err = store.GetDueTasks(now, now.Add(7*time.Second), 0)
 	require.NoError(t, err)
 	assert.Len(t, tasks, 1)
 	assert.Equal(t, "task1", tasks[0].ID)
@@ -142,7 +142,7 @@ func TestSaveAndGetTasks(t *testing.T) {
 	// Test Delete
 	err = store.Delete(task1.ID)
 	require.NoError(t, err)
-	tasks, err = store.GetDueTasks(now, now.Add(15*time.Second))
+	tasks, err = store.GetDueTasks(now, now.Add(15*time.Second), 0)
 	require.NoError(t, err)
 	assert.Len(t, tasks, 1)
 	assert.Equal(t, "task2", tasks[0].ID)
@@ -162,7 +162,7 @@ func TestStatusLifecycle(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, StatusPending, got.Status)
 
-	due, err := store.GetDueTasks(now, now.Add(15*time.Second))
+	due, err := store.GetDueTasks(now, now.Add(15*time.Second), 0)
 	require.NoError(t, err)
 	assert.Len(t, due, 1)
 
@@ -172,7 +172,7 @@ func TestStatusLifecycle(t *testing.T) {
 	got.Attempts = []Attempt{{N: 1, StatusCode: 200}}
 	require.NoError(t, store.Update(*got))
 
-	due, err = store.GetDueTasks(now, now.Add(15*time.Second))
+	due, err = store.GetDueTasks(now, now.Add(15*time.Second), 0)
 	require.NoError(t, err)
 	assert.Empty(t, due, "terminal task must not be due")
 
@@ -204,13 +204,13 @@ func TestRecoverRunning(t *testing.T) {
 	// Simulate a crash mid-run: task stuck in running.
 	task.Status = StatusRunning
 	require.NoError(t, store.Update(task))
-	due, _ := store.GetDueTasks(now, now.Add(15*time.Second))
+	due, _ := store.GetDueTasks(now, now.Add(15*time.Second), 0)
 	require.Empty(t, due)
 
 	// Recovery re-queues it to pending, and the due-scan must catch it up
 	// despite its ExecuteAt being in the past.
 	require.NoError(t, store.RecoverRunning())
-	due, err := store.GetDueTasks(now, now.Add(15*time.Second))
+	due, err := store.GetDueTasks(now, now.Add(15*time.Second), 0)
 	require.NoError(t, err)
 	require.Len(t, due, 1)
 	assert.Equal(t, StatusPending, due[0].Status)
@@ -233,7 +233,7 @@ func TestKeyOrdering(t *testing.T) {
 	}
 
 	// Should come back in chronological order
-	result, err := store.GetDueTasks(now, now.Add(1*time.Minute))
+	result, err := store.GetDueTasks(now, now.Add(1*time.Minute), 0)
 	require.NoError(t, err)
 	require.Len(t, result, 3)
 	assert.Equal(t, "task1", result[0].ID)
@@ -245,7 +245,7 @@ func TestEmptyResults(t *testing.T) {
 	store, cleanup := setupBadgerDB(t)
 	defer cleanup()
 
-	tasks, err := store.GetDueTasks(time.Now(), time.Now().Add(1*time.Hour))
+	tasks, err := store.GetDueTasks(time.Now(), time.Now().Add(1*time.Hour), 0)
 	require.NoError(t, err)
 	assert.Empty(t, tasks)
 }
@@ -592,4 +592,48 @@ func TestCountsEmptyStore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, counts.ByStatus)
 	assert.Zero(t, counts.Overdue)
+}
+
+// After an outage the pending partition can hold an arbitrary backlog. One call
+// must return a bounded batch, oldest first, so the caller drains rather than
+// loads everything at once.
+func TestGetDueTasksBatchLimit(t *testing.T) {
+	store, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	const backlog = 20
+	for i := 0; i < backlog; i++ {
+		require.NoError(t, store.Save(Task{
+			ID:        fmt.Sprintf("due%02d", i),
+			ExecuteAt: now.Add(time.Duration(i-backlog) * time.Minute), // all overdue
+		}))
+	}
+
+	batch, err := store.GetDueTasks(now, now, 5)
+	require.NoError(t, err)
+	require.Len(t, batch, 5)
+	assert.Equal(t, "due00", batch[0].ID, "the oldest task is drained first")
+	assert.Equal(t, "due04", batch[4].ID)
+
+	// The batch caps at MaxDueBatch however large the request, and <= 0 means
+	// the cap rather than nothing.
+	unbounded, err := store.GetDueTasks(now, now, 0)
+	require.NoError(t, err)
+	assert.Len(t, unbounded, backlog)
+
+	oversized, err := store.GetDueTasks(now, now, MaxDueBatch*10)
+	require.NoError(t, err)
+	assert.Len(t, oversized, backlog)
+
+	// Draining is what makes progress: finished tasks leave the partition and
+	// the next batch picks up where the last left off.
+	for _, task := range batch {
+		task.Status = StatusSucceeded
+		require.NoError(t, store.Update(task))
+	}
+	next, err := store.GetDueTasks(now, now, 5)
+	require.NoError(t, err)
+	require.Len(t, next, 5)
+	assert.Equal(t, "due05", next[0].ID)
 }

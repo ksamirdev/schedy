@@ -1,0 +1,85 @@
+---
+title: "Catch-up"
+description: "What happens to tasks that came due while Schedy was down, and how to stop the recovery from becoming your incident."
+---
+
+Schedy delivers at least once, so a task that came due while the process was stopped is not lost.
+On restart it is still pending, still past its `execute_at`, and the runner picks it up on the next tick.
+
+That guarantee has a sharp edge.
+An instance that was down for six hours comes back holding every task that fell due in those six hours - and without a bound, it fires all of them at once, at your own API.
+
+Two knobs shape what happens instead.
+
+## Bounded concurrency
+
+`SCHEDY_MAX_CONCURRENT_DELIVERIES` (default `50`) caps how many deliveries run at the same time.
+
+A backlog drains steadily rather than arriving as one spike: with the default, 10,000 overdue tasks against a target answering in 200ms drain in about 40 seconds, and the target never sees more than 50 concurrent requests.
+Every task is still delivered.
+
+Raise it if your targets are fast and you want a shorter drain; lower it if they are fragile.
+Watch `schedy_deliveries_inflight` against the limit - sitting at the cap means the runner is saturated and lateness is accumulating.
+
+<Note>
+  The cap applies at all times, not just after an outage. A thousand tasks scheduled for the same instant have exactly the same shape as a backlog.
+</Note>
+
+## Staleness
+
+Some work is worth doing late and some is not.
+A nightly report can arrive an hour behind; a "your code expires in 5 minutes" webhook six hours late is worse than never sending it.
+
+`SCHEDY_MAX_STALENESS` is unset by default - Schedy catches everything up, however old.
+Set it to a Go duration and any task that comes due more than that late is skipped instead of delivered.
+
+```bash
+SCHEDY_MAX_STALENESS=1h ./schedy
+```
+
+A skipped task becomes `failed`, with the reason recorded as an attempt:
+
+```json
+{
+  "id": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "status": "failed",
+  "attempts": [
+    {
+      "n": 1,
+      "fired_at": "2030-01-01T15:02:11Z",
+      "error": "skipped: 6h2m0s past execute_at, exceeds max staleness 1h0m0s"
+    }
+  ]
+}
+```
+
+It also fires the [failure callback](/concepts/retries#failure-callback) and counts in `schedy_tasks_skipped_total`.
+Skipping is never silent - an outage that quietly swallowed work would be worse than one that fired it late.
+
+<Note>
+  A recurring task that is skipped still re-enqueues, anchored forward from the moment it was skipped. An outage interrupts a chain; it does not end it.
+</Note>
+
+Staleness is measured against the moment the task would actually go out, not the moment it was picked up.
+A task queued behind the concurrency cap is judged by when its turn arrives, so a long drain cannot deliver something the limit says is already too old.
+
+## Choosing a value
+
+There is no default that is right for both a nightly report and a 5-minute expiry link, which is why there isn't one.
+
+- **Leave it unset** if every task is worth doing whenever it happens - billing runs, syncs, cleanup jobs. This is the historical behavior.
+- **Set it near your longest acceptable delay** if tasks are time-sensitive. A value slightly above your longest expected outage plus drain time skips only genuinely dead work.
+- **Set it low** only if you would rather drop than deliver late, and you are watching `schedy_tasks_skipped_total`.
+
+## Batching
+
+Independently of both knobs, the runner reads due tasks in batches of at most 1,000 per tick.
+A larger backlog is drained over successive ticks, oldest first, rather than being read into memory in one slice.
+
+A task already being delivered is not picked up again by a later tick, so a slow delivery is never doubled up while it sits in the queue.
+
+## What this is not
+
+Schedy does not replay a missed *schedule*.
+A recurring task that was due to fire four times during an outage fires once on recovery and then resumes its interval from that point - there is no backfill, and there never will be.
+See [why that constraint exists](/api/create#recurrence).
