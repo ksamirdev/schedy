@@ -3,7 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -50,7 +50,8 @@ func New(store scheduler.Store, executor *executor.Executor, interval time.Durat
 	if v := os.Getenv("SCHEDY_MAX_CONCURRENT_DELIVERIES"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {
-			log.Fatalf("invalid SCHEDY_MAX_CONCURRENT_DELIVERIES %q: want a positive integer", v)
+			slog.Error("invalid SCHEDY_MAX_CONCURRENT_DELIVERIES", "value", v, "want", "a positive integer")
+			os.Exit(1)
 		}
 		maxConcurrent = n
 	}
@@ -59,7 +60,8 @@ func New(store scheduler.Store, executor *executor.Executor, interval time.Durat
 	if v := os.Getenv("SCHEDY_MAX_STALENESS"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
-			log.Fatalf("invalid SCHEDY_MAX_STALENESS %q: want a positive Go duration like \"1h\"", v)
+			slog.Error("invalid SCHEDY_MAX_STALENESS", "value", v, "want", `a positive Go duration like "1h"`)
+			os.Exit(1)
 		}
 		maxStaleness = d
 	}
@@ -111,7 +113,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 	// over successive ticks, oldest first, rather than read in at once.
 	tasks, err := r.store.GetDueTasks(start, end, scheduler.MaxDueBatch)
 	if err != nil {
-		log.Println("Failed to get due tasks:", err)
+		slog.Error("get due tasks", "error", err)
 		return
 	}
 
@@ -156,7 +158,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 			// in the store if that window ever matters.
 			cur, err := r.store.GetTask(t.ID)
 			if err != nil {
-				log.Printf("re-read task %s before firing: %v", t.ID, err)
+				slog.Error("re-read task before firing", "task_id", t.ID, "error", err)
 				return
 			}
 			// Cancelled or deleted mid-flight: expected, not an error.
@@ -164,7 +166,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 				return
 			}
 			if !cur.ExecuteAt.Equal(t.ExecuteAt) {
-				log.Printf("Task %s rescheduled to %s, skipping this run", t.ID, cur.ExecuteAt.Format(time.RFC3339))
+				slog.Info("task rescheduled, skipping this run", "task_id", t.ID, "execute_at", cur.ExecuteAt)
 				return
 			}
 			t = *cur
@@ -186,11 +188,11 @@ func (r *Runner) runOnce(start, end time.Time) {
 			// takes effect on this run rather than the next one.
 			attempt := newAttempt(t.Retries, t.RetryInterval, t.RetryMode)
 
-			log.Printf("#%d | Executing task: %s", idx, t.ID)
+			slog.Info("executing task", "task_id", t.ID, "url", t.URL, "method", t.Method, "late", late)
 
 			t.Status = scheduler.StatusRunning
 			if err := r.store.Update(t); err != nil {
-				log.Printf("mark running %s: %v", t.ID, err)
+				slog.Error("mark task running", "task_id", t.ID, "error", err)
 			}
 
 			// Continue the numbering rather than restarting it: a replayed
@@ -219,7 +221,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 					break
 				}
 				if attempt.next() {
-					log.Printf("Retrying task: %s (attempt %d/%d)", t.ID, attempt.count, attempt.strategy.retries)
+					slog.Warn("retrying task", "task_id", t.ID, "attempt", attempt.count, "retries", attempt.strategy.retries, "error", res.Err)
 					continue
 				}
 				t.Status = scheduler.StatusFailed
@@ -231,7 +233,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 			now := time.Now().UTC()
 			t.FinishedAt = &now
 			if err := r.store.Update(t); err != nil {
-				log.Printf("finalize %s (%s): %v", t.ID, t.Status, err)
+				slog.Error("finalize task", "task_id", t.ID, "status", t.Status, "error", err)
 			}
 
 			if t.Status == scheduler.StatusFailed {
@@ -252,7 +254,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 // no trace. A recurring task still re-enqueues, so an outage interrupts the
 // chain rather than ending it.
 func (r *Runner) skipStale(t scheduler.Task, late time.Duration, fireTime time.Time) {
-	log.Printf("Task %s is %s past execute_at (max staleness %s), skipping", t.ID, late.Round(time.Second), r.maxStaleness)
+	slog.Warn("skipping stale task", "task_id", t.ID, "late", late.Round(time.Second), "max_staleness", r.maxStaleness)
 
 	t.Status = scheduler.StatusFailed
 	t.Attempts = append(t.Attempts, scheduler.Attempt{
@@ -267,7 +269,7 @@ func (r *Runner) skipStale(t scheduler.Task, late time.Duration, fireTime time.T
 	metrics.ObserveTaskFinished(false)
 
 	if err := r.store.Update(t); err != nil {
-		log.Printf("finalize skipped %s: %v", t.ID, err)
+		slog.Error("finalize skipped task", "task_id", t.ID, "error", err)
 	}
 	r.notifyFailure(t)
 	r.reschedule(t, fireTime)
@@ -292,7 +294,7 @@ func (r *Runner) reschedule(t scheduler.Task, fireTime time.Time) {
 	if err != nil || interval <= 0 {
 		// Validated at create/update time; a bad value here means a hand-edited
 		// record. Drop the chain rather than spin.
-		log.Printf("recurring task %s has invalid schedule %q, not re-enqueuing", t.ID, t.Schedule)
+		slog.Error("recurring task has an invalid schedule, not re-enqueuing", "task_id", t.ID, "schedule", t.Schedule)
 		return
 	}
 	// The successor is this task at a new time: clone it, then reset identity
@@ -305,7 +307,7 @@ func (r *Runner) reschedule(t scheduler.Task, fireTime time.Time) {
 	next.Attempts = nil
 	next.FinishedAt = nil
 	if err := r.store.Save(next); err != nil {
-		log.Printf("reschedule %s: %v", t.ID, err)
+		slog.Error("reschedule task", "task_id", t.ID, "error", err)
 	}
 }
 
@@ -330,6 +332,6 @@ func (r *Runner) notifyFailure(t scheduler.Task) {
 		},
 	})
 	if res.Err != nil {
-		log.Printf("failure callback for %s: %v", t.ID, res.Err)
+		slog.Error("failure callback", "task_id", t.ID, "error", res.Err)
 	}
 }
