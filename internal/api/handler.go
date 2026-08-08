@@ -219,8 +219,14 @@ func (h *Handler) loadTask(w http.ResponseWriter, r *http.Request) (*scheduler.T
 // ponytail: pages the whole pending partition on every create - O(pending) per
 // request. Add an idempotency-key index if create throughput makes it hot.
 func (h *Handler) findDuplicate(key, url string, executeAt time.Time) (*scheduler.Task, error) {
+	// Without an idempotency key the duplicate is same-url by definition, so let
+	// the store skip every other URL instead of paging them all back here.
+	filter := scheduler.ListFilter{Status: string(scheduler.StatusPending)}
+	if key == "" {
+		filter.URL = url
+	}
 	for cursor := ""; ; {
-		pending, next, err := h.Store.ListTasks(string(scheduler.StatusPending), cursor, scheduler.MaxPageSize)
+		pending, next, err := h.Store.ListTasks(filter, cursor, scheduler.MaxPageSize)
 		if err != nil {
 			return nil, err
 		}
@@ -381,7 +387,8 @@ func (h *Handler) ReplayTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListTasks returns one page of scheduled tasks, optionally filtered by
-// ?status=. Paging is by ?cursor= (opaque, from next_cursor) and ?limit=.
+// ?status= and exact ?url=. Paging is by ?cursor= (opaque, from next_cursor)
+// and ?limit=.
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -401,7 +408,7 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 
-	tasks, next, err := h.Store.ListTasks(status, q.Get("cursor"), limit)
+	tasks, next, err := h.Store.ListTasks(scheduler.ListFilter{Status: status, URL: q.Get("url")}, q.Get("cursor"), limit)
 	if errors.Is(err, scheduler.ErrInvalidCursor) {
 		http.Error(w, "invalid cursor", http.StatusBadRequest)
 		return
@@ -525,7 +532,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 // otherwise. It reads a single row: a probe that runs every few seconds must not
 // scan the store.
 func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
-	_, _, err := h.Store.ListTasks("", "", 1)
+	_, _, err := h.Store.ListTasks(scheduler.ListFilter{}, "", 1)
 	if err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return

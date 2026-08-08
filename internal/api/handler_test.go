@@ -74,7 +74,7 @@ func (m *mockStore) GetTask(id string) (*scheduler.Task, error) {
 
 // ListTasks pages over the map in id order. The real store pages in key order;
 // the mock only needs a stable order and the same cursor contract.
-func (m *mockStore) ListTasks(status, cursor string, limit int) ([]scheduler.Task, string, error) {
+func (m *mockStore) ListTasks(filter scheduler.ListFilter, cursor string, limit int) ([]scheduler.Task, string, error) {
 	if limit <= 0 {
 		limit = scheduler.DefaultPageSize
 	}
@@ -93,7 +93,10 @@ func (m *mockStore) ListTasks(status, cursor string, limit int) ([]scheduler.Tas
 
 	var ids []string
 	for id, task := range m.tasks {
-		if status != "" && string(task.Status) != status {
+		if filter.Status != "" && string(task.Status) != filter.Status {
+			continue
+		}
+		if filter.URL != "" && task.URL != filter.URL {
 			continue
 		}
 		if cursor != "" && id <= start {
@@ -741,7 +744,7 @@ func TestCreateTaskConcurrentIdempotency(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	all, _, err := handler.Store.ListTasks("", "", 0)
+	all, _, err := handler.Store.ListTasks(scheduler.ListFilter{}, "", 0)
 	require.NoError(t, err)
 	assert.Len(t, all, 1, "concurrent same-key creates must persist exactly one task")
 
@@ -1278,7 +1281,7 @@ func (f *failingStore) GetTask(id string) (*scheduler.Task, error) {
 	return nil, nil
 }
 
-func (f *failingStore) ListTasks(status, cursor string, limit int) ([]scheduler.Task, string, error) {
+func (f *failingStore) ListTasks(filter scheduler.ListFilter, cursor string, limit int) ([]scheduler.Task, string, error) {
 	return nil, "", errors.New("database connection failed")
 }
 
@@ -1493,4 +1496,23 @@ func TestCreateTaskBodyTooLarge(t *testing.T) {
 	h.CreateTask(w, req)
 
 	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+}
+
+func TestListTasksURLFilter(t *testing.T) {
+	store := newMockStore()
+	handler := New(store)
+
+	now := time.Now()
+	store.Save(scheduler.Task{ID: "a", ExecuteAt: now.Add(time.Minute), URL: "http://a.example.com"})
+	store.Save(scheduler.Task{ID: "b", ExecuteAt: now.Add(time.Minute), URL: "http://b.example.com"})
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks?url="+url.QueryEscape("http://a.example.com"), nil)
+	w := httptest.NewRecorder()
+	handler.ListTasks(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var page taskPage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &page))
+	require.Len(t, page.Tasks, 1)
+	assert.Equal(t, "a", page.Tasks[0].ID)
 }
