@@ -22,6 +22,11 @@ import (
 
 const DEFAULT_RETRY_INTERVAL = 2000
 
+// maxTaskBody caps a create/update body at 1 MiB. A task is a URL plus a
+// payload; anything bigger is a client bug or abuse, and an unbounded read
+// would let one request balloon memory.
+const maxTaskBody = 1 << 20
+
 // validMethods is the whitelist of HTTP verbs a task may deliver.
 var validMethods = map[string]bool{
 	http.MethodGet:    true,
@@ -90,7 +95,13 @@ type taskRequest struct {
 // whether the caller may continue.
 func decodeTaskRequest(w http.ResponseWriter, r *http.Request) (taskRequest, time.Time, bool) {
 	var req taskRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxTaskBody)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return req, time.Time{}, false
+		}
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return req, time.Time{}, false
 	}

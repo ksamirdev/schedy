@@ -129,6 +129,8 @@ paths:
                 status: pending
         '400':
           $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -336,6 +338,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/ServerError'
     delete:
@@ -553,6 +557,14 @@ components:
         `method`, a malformed or past `execute_at`, an invalid `retry_mode`, an
         invalid `schedule`, an unparseable time filter, or a bulk delete with no
         filter. The body is a plain-text reason.
+      content:
+        text/plain:
+          schema:
+            type: string
+    PayloadTooLarge:
+      description: >-
+        The request body exceeds the 1 MiB limit for task bodies. The body is a
+        plain-text reason.
       content:
         text/plain:
           schema:

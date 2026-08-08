@@ -1482,3 +1482,15 @@ func TestReplayTaskHandler(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 }
+
+func TestCreateTaskBodyTooLarge(t *testing.T) {
+	h := New(newMockStore())
+
+	body := append([]byte(`{"payload":"`), bytes.Repeat([]byte("a"), maxTaskBody+1)...)
+	body = append(body, `"}`...)
+	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.CreateTask(w, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+}
