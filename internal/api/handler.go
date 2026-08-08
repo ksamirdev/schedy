@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ksamirdev/schedy/internal/metrics"
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
 
@@ -401,6 +403,27 @@ func (h *Handler) DeleteTasks(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+}
+
+// Metrics renders Prometheus metrics. The task gauges are read from the store
+// per scrape so they can't drift from it; everything else is in-process.
+func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
+	counts, err := h.Store.Counts(time.Now().UTC())
+	if err != nil {
+		http.Error(w, "could not read task counts", http.StatusInternalServerError)
+		return
+	}
+
+	byStatus := make(map[string]int, len(counts.ByStatus))
+	for status, n := range counts.ByStatus {
+		byStatus[string(status)] = n
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	if err := metrics.Write(w, metrics.Snapshot{ByStatus: byStatus, Overdue: counts.Overdue}); err != nil {
+		// Headers are already out; the scrape fails on a truncated body.
+		log.Printf("write metrics: %v", err)
+	}
 }
 
 // Health is a liveness probe. Always returns 200 OK.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -295,6 +296,59 @@ func encodeCursor(key []byte) string {
 
 func decodeCursor(cursor string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(cursor)
+}
+
+// Counts tallies tasks per status and counts the pending backlog.
+//
+// The scan is keys-only - the status and ExecuteAt it needs are both encoded in
+// the key, so no value is ever decoded, and the whole tally is one pass over the
+// key index.
+//
+// ponytail: still O(total tasks) per call, which at metrics scrape intervals is
+// a repeated full key scan. Maintain incremental counters in the store if that
+// ever costs more than it reports; exactness is why it reads the store instead.
+func (s *BadgerStore) Counts(now time.Time) (Counts, error) {
+	counts := Counts{ByStatus: make(map[TaskStatus]int, 5)}
+	cutoff := now.Unix()
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		prefix := []byte(keyPrefix)
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			status, executeAt, ok := parseKey(string(it.Item().Key()))
+			if !ok {
+				continue
+			}
+			counts.ByStatus[status]++
+			if status == StatusPending && executeAt <= cutoff {
+				counts.Overdue++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Counts{}, err
+	}
+	return counts, nil
+}
+
+// parseKey pulls the status and unix ExecuteAt back out of a storage key
+// ("task:<status>:<zero-padded-unix-ts>:<id>"). Reports false on a key that
+// isn't one of ours.
+func parseKey(key string) (TaskStatus, int64, bool) {
+	parts := strings.SplitN(key, ":", 4)
+	if len(parts) != 4 || parts[0] != "task" {
+		return "", 0, false
+	}
+	ts, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return TaskStatus(parts[1]), ts, true
 }
 
 // GetTask retrieves a single task by id. Returns nil if it doesn't exist.

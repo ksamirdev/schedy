@@ -1,0 +1,87 @@
+---
+title: "Metrics"
+description: "GET /metrics - Prometheus metrics for queue depth, backlog, delivery outcomes, and lateness."
+---
+
+```
+GET /metrics
+```
+
+Returns Prometheus metrics in the text exposition format (`version=0.0.4`).
+
+Unlike `/healthz` and `/readyz`, this endpoint sits behind the API key when `SCHEDY_API_KEY` is set - queue depth and backlog are operational detail.
+
+```bash
+curl http://localhost:8080/metrics -H "X-API-Key: your-secret"
+```
+
+## What's exported
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `schedy_tasks{status}` | gauge | Tasks currently in each lifecycle status. Every status is exported, including zeroes. |
+| `schedy_tasks_overdue` | gauge | Pending tasks whose `execute_at` has already passed. |
+| `schedy_deliveries_total{result}` | counter | Delivery requests fired at task targets. Retries count individually. |
+| `schedy_tasks_finished_total{status}` | counter | Tasks that reached a terminal delivery outcome, counted once each. |
+| `schedy_delivery_duration_seconds` | histogram | Round-trip time of delivery requests. |
+| `schedy_task_lateness_seconds` | histogram | Delay between a task's `execute_at` and the moment it fired. |
+
+```
+# HELP schedy_tasks_overdue Pending tasks whose execute_at has already passed.
+# TYPE schedy_tasks_overdue gauge
+schedy_tasks_overdue 117
+
+# HELP schedy_deliveries_total Delivery requests fired at task targets, by outcome. Retries count individually.
+# TYPE schedy_deliveries_total counter
+schedy_deliveries_total{result="success"} 1423
+schedy_deliveries_total{result="failure"} 17
+```
+
+<Note>
+  Counters reset when Schedy restarts, which is what Prometheus expects - `rate()` and `increase()` handle the reset for you.
+  The `schedy_tasks` gauges are read from the store on every scrape, so they never drift from what is actually stored.
+</Note>
+
+Go runtime metrics (`go_goroutines`, `go_memstats_*`) are **not** exported.
+Schedy emits the exposition format directly rather than depending on the Prometheus client library.
+
+## Scrape config
+
+```yaml
+scrape_configs:
+  - job_name: schedy
+    static_configs:
+      - targets: ["schedy:8080"]
+    # SCHEDY_API_KEY travels as a plain header (Prometheus 2.50+)
+    http_headers:
+      X-API-Key:
+        values: ["your-secret"]
+```
+
+Leave `SCHEDY_API_KEY` unset and the endpoint is open, like `/healthz`.
+
+## The two that matter
+
+`schedy_tasks_overdue` is the signal that Schedy is not keeping up.
+A healthy instance holds it near zero: tasks fire within a runner tick of their scheduled time.
+A sustained non-zero value means work is arriving faster than it can be delivered, or a target is slow enough to hold the worker goroutines.
+
+`schedy_task_lateness_seconds` is the same story as a distribution.
+Alert on its high quantiles rather than its mean - a p99 of several minutes with a healthy mean is a subset of targets timing out, which the failure counter alone will not tell you.
+
+```promql
+# Backlog that isn't draining
+schedy_tasks_overdue > 0
+
+# Delivery failure ratio over 5 minutes
+rate(schedy_deliveries_total{result="failure"}[5m])
+  / rate(schedy_deliveries_total[5m])
+
+# p99 lateness
+histogram_quantile(0.99, rate(schedy_task_lateness_seconds_bucket[5m]))
+```
+
+<Warning>
+  The `schedy_tasks` gauges scan the key index on every scrape.
+  That is one pass over task keys - no task bodies are read - which is fast into the millions, but worth knowing if you scrape aggressively with a very large store.
+</Warning>

@@ -549,3 +549,47 @@ func TestListTasksPagination(t *testing.T) {
 		assert.Equal(t, "t00", succeeded[0].ID)
 	})
 }
+
+// Counts must tally from the key index alone and must agree with what the store
+// actually holds, including after tasks move between status partitions.
+func TestCounts(t *testing.T) {
+	store, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	require.NoError(t, store.Save(Task{ID: "late1", ExecuteAt: now.Add(-2 * time.Minute)}))
+	require.NoError(t, store.Save(Task{ID: "late2", ExecuteAt: now.Add(-1 * time.Minute)}))
+	require.NoError(t, store.Save(Task{ID: "soon", ExecuteAt: now.Add(time.Hour)}))
+
+	counts, err := store.Counts(now)
+	require.NoError(t, err)
+	assert.Equal(t, 3, counts.ByStatus[StatusPending])
+	assert.Equal(t, 2, counts.Overdue, "only past-due pending tasks are backlog")
+
+	// A task that finishes leaves the pending partition, and with it the backlog.
+	done, err := store.GetTask("late1")
+	require.NoError(t, err)
+	done.Status = StatusSucceeded
+	require.NoError(t, store.Update(*done))
+
+	counts, err = store.Counts(now)
+	require.NoError(t, err)
+	assert.Equal(t, 2, counts.ByStatus[StatusPending])
+	assert.Equal(t, 1, counts.ByStatus[StatusSucceeded])
+	assert.Equal(t, 1, counts.Overdue)
+
+	// A future-dated task is never backlog, however many there are.
+	counts, err = store.Counts(now.Add(-time.Hour))
+	require.NoError(t, err)
+	assert.Zero(t, counts.Overdue, "nothing is overdue before anything is due")
+}
+
+func TestCountsEmptyStore(t *testing.T) {
+	store, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	counts, err := store.Counts(time.Now())
+	require.NoError(t, err)
+	assert.Empty(t, counts.ByStatus)
+	assert.Zero(t, counts.Overdue)
+}

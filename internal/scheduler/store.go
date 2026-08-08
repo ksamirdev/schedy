@@ -16,6 +16,16 @@ const (
 	MaxPageSize     = 1000
 )
 
+// Counts is a tally of the store's contents, cheap enough to compute per
+// metrics scrape.
+type Counts struct {
+	// ByStatus counts Tasks per lifecycle status.
+	ByStatus map[TaskStatus]int
+	// Overdue counts pending Tasks whose ExecuteAt has already passed - the
+	// backlog the runner has yet to work through.
+	Overdue int
+}
+
 type Store interface {
 	// Save creates a new Task in the pending keyspace.
 	Save(task Task) error
@@ -36,4 +46,7 @@ type Store interface {
 	// RecoverRunning re-queues Tasks stuck in running (e.g. after a crash)
 	// back to pending. Delivery is at-least-once.
 	RecoverRunning() error
+	// Counts tallies Tasks per status, and how many pending Tasks are already
+	// due as of now.
+	Counts(now time.Time) (Counts, error)
 }

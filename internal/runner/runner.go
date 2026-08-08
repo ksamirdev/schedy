@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ksamirdev/schedy/internal/executor"
+	"github.com/ksamirdev/schedy/internal/metrics"
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
 
@@ -87,6 +88,10 @@ func (r *Runner) runOnce(start, end time.Time) {
 			}
 			t = *cur
 
+			// Recorded only once the task is committed to firing: a cancelled or
+			// rescheduled task never ran, so its wait is not delivery lateness.
+			metrics.ObserveLateness(fireTime.Sub(t.ExecuteAt))
+
 			// Built from the re-read copy so an update to the retry settings
 			// takes effect on this run rather than the next one.
 			attempt := newAttempt(t.Retries, t.RetryInterval, t.RetryMode)
@@ -114,6 +119,7 @@ func (r *Runner) runOnce(start, end time.Time) {
 					att.ResponseBodyTruncated = res.ResponseBodyTruncated
 				}
 				t.Attempts = append(t.Attempts, att)
+				metrics.ObserveDelivery(res.Duration, res.Err == nil)
 
 				if res.Err == nil {
 					t.Status = scheduler.StatusSucceeded
@@ -126,6 +132,8 @@ func (r *Runner) runOnce(start, end time.Time) {
 				t.Status = scheduler.StatusFailed
 				break
 			}
+
+			metrics.ObserveTaskFinished(t.Status == scheduler.StatusSucceeded)
 
 			now := time.Now().UTC()
 			t.FinishedAt = &now

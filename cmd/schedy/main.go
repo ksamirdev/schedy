@@ -57,6 +57,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handler.Health)
 	mux.HandleFunc("GET /readyz", handler.Ready)
+	// Behind the API key: queue depth and backlog are operational detail, and a
+	// Prometheus scrape config can carry the header.
+	mux.HandleFunc("GET /metrics", handler.WithAuth(handler.Metrics))
 	mux.HandleFunc("POST /tasks", handler.WithAuth(handler.CreateTask))
 	mux.HandleFunc("GET /tasks", handler.WithAuth(handler.ListTasks))
 	mux.HandleFunc("GET /tasks/{id}", handler.WithAuth(handler.GetTask))
