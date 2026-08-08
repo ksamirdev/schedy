@@ -37,6 +37,10 @@ type Counts struct {
 type ListFilter struct {
 	Status string // lifecycle status, "" = all
 	URL    string // exact delivery URL, "" = all
+	// DueBefore/DueAfter bound ExecuteAt (strictly before / strictly after,
+	// matching DeleteTasks), nil = unbounded.
+	DueBefore *time.Time
+	DueAfter  *time.Time
 }
 
 type Store interface {

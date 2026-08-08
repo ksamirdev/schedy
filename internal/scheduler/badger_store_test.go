@@ -693,3 +693,53 @@ func TestListTasksURLFilter(t *testing.T) {
 		assert.Empty(t, next)
 	})
 }
+
+// Time-window filters bound ExecuteAt strictly (matching DeleteTasks) and
+// compose with each other and the status partition.
+func TestListTasksTimeFilter(t *testing.T) {
+	store, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	base := time.Now().UTC().Truncate(time.Second)
+	const total = 10
+	for i := 0; i < total; i++ {
+		require.NoError(t, store.Save(Task{
+			ID:        fmt.Sprintf("w%02d", i),
+			URL:       "http://example.com",
+			ExecuteAt: base.Add(time.Duration(i) * time.Hour),
+		}))
+	}
+	at := func(i int) *time.Time { t := base.Add(time.Duration(i) * time.Hour); return &t }
+
+	t.Run("due_before is strict", func(t *testing.T) {
+		page, _, err := store.ListTasks(ListFilter{DueBefore: at(3)}, "", 0)
+		require.NoError(t, err)
+		assert.Len(t, page, 3) // w00..w02; w03 == bound excluded
+	})
+
+	t.Run("due_after is strict", func(t *testing.T) {
+		page, _, err := store.ListTasks(ListFilter{DueAfter: at(7)}, "", 0)
+		require.NoError(t, err)
+		assert.Len(t, page, 2) // w08, w09
+	})
+
+	t.Run("window composes with status", func(t *testing.T) {
+		page, _, err := store.ListTasks(ListFilter{
+			Status:    string(StatusPending),
+			DueAfter:  at(2),
+			DueBefore: at(6),
+		}, "", 0)
+		require.NoError(t, err)
+		assert.Len(t, page, 3) // w03..w05
+		for _, task := range page {
+			assert.True(t, task.ExecuteAt.After(*at(2)) && task.ExecuteAt.Before(*at(6)))
+		}
+	})
+
+	t.Run("empty window", func(t *testing.T) {
+		page, next, err := store.ListTasks(ListFilter{DueAfter: at(6), DueBefore: at(3)}, "", 0)
+		require.NoError(t, err)
+		assert.Empty(t, page)
+		assert.Empty(t, next)
+	})
+}

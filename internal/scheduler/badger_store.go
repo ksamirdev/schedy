@@ -289,6 +289,12 @@ func (s *BadgerStore) ListTasks(filter ListFilter, cursor string, limit int) ([]
 			if filter.URL != "" && t.URL != filter.URL {
 				continue
 			}
+			if filter.DueBefore != nil && !t.ExecuteAt.Before(*filter.DueBefore) {
+				continue
+			}
+			if filter.DueAfter != nil && !t.ExecuteAt.After(*filter.DueAfter) {
+				continue
+			}
 			// One more matching row exists beyond this page, so hand back a cursor.
 			if len(tasks) == limit {
 				next = encodeCursor(lastKey)

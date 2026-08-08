@@ -387,8 +387,9 @@ func (h *Handler) ReplayTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListTasks returns one page of scheduled tasks, optionally filtered by
-// ?status= and exact ?url=. Paging is by ?cursor= (opaque, from next_cursor)
-// and ?limit=.
+// ?status=, exact ?url=, and the ?due_before=/?due_after= time window
+// (RFC3339, strict bounds on execute_at). Paging is by ?cursor= (opaque, from
+// next_cursor) and ?limit=.
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -408,7 +409,25 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 
-	tasks, next, err := h.Store.ListTasks(scheduler.ListFilter{Status: status, URL: q.Get("url")}, q.Get("cursor"), limit)
+	filter := scheduler.ListFilter{Status: status, URL: q.Get("url")}
+	if v := q.Get("due_before"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid due_before (RFC3339 required)", http.StatusBadRequest)
+			return
+		}
+		filter.DueBefore = &t
+	}
+	if v := q.Get("due_after"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "invalid due_after (RFC3339 required)", http.StatusBadRequest)
+			return
+		}
+		filter.DueAfter = &t
+	}
+
+	tasks, next, err := h.Store.ListTasks(filter, q.Get("cursor"), limit)
 	if errors.Is(err, scheduler.ErrInvalidCursor) {
 		http.Error(w, "invalid cursor", http.StatusBadRequest)
 		return
