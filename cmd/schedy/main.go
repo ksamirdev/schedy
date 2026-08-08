@@ -15,9 +15,16 @@ import (
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
 
-// dataDir is where BadgerDB persists tasks. Shared by the server and the
-// offline restore path so a restore can't target the wrong directory.
-const dataDir = "data"
+// dataDir is where BadgerDB persists tasks, from SCHEDY_DATA_DIR (default
+// "data"). An env var rather than a flag so the server and the offline restore
+// subcommand resolve the same directory the same way, and a restore can't
+// target the wrong one.
+func dataDir() string {
+	if v := os.Getenv("SCHEDY_DATA_DIR"); v != "" {
+		return v
+	}
+	return "data"
+}
 
 func main() {
 	// Offline subcommand: `schedy restore <backup-file>` loads a snapshot taken
@@ -40,7 +47,7 @@ func main() {
 		historyTTL = d
 	}
 
-	store, err := scheduler.NewBadgerStore(dataDir, historyTTL)
+	store, err := scheduler.NewBadgerStore(dataDir(), historyTTL)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -116,8 +123,8 @@ func runRestore(args []string) {
 	if len(args) != 1 {
 		log.Fatal("usage: schedy restore <backup-file>")
 	}
-	if err := scheduler.Restore(dataDir, args[0]); err != nil {
+	if err := scheduler.Restore(dataDir(), args[0]); err != nil {
 		log.Fatalf("restore: %v", err)
 	}
-	log.Printf("restore complete: %s -> %s/", args[0], dataDir)
+	log.Printf("restore complete: %s -> %s/", args[0], dataDir())
 }
