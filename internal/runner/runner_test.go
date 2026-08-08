@@ -83,7 +83,7 @@ func (f *fakeStore) GetDueTasks(start, end time.Time) ([]scheduler.Task, error) 
 	return tasks, nil
 }
 
-func (f *fakeStore) ListTasks(status string) ([]scheduler.Task, error) {
+func (f *fakeStore) ListTasks(status, cursor string, limit int) ([]scheduler.Task, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var tasks []scheduler.Task
@@ -92,7 +92,7 @@ func (f *fakeStore) ListTasks(status string) ([]scheduler.Task, error) {
 			tasks = append(tasks, task)
 		}
 	}
-	return tasks, nil
+	return tasks, "", nil
 }
 
 func (f *fakeStore) RecoverRunning() error { return nil }
@@ -199,11 +199,11 @@ func TestRecurringReschedule(t *testing.T) {
 
 		// The successor is a fresh, distinct, pending one-shot carrying the schedule.
 		require.Eventually(t, func() bool {
-			pending, _ := store.ListTasks(string(scheduler.StatusPending))
+			pending, _, _ := store.ListTasks(string(scheduler.StatusPending), "", 0)
 			return len(pending) == 1
 		}, 2*time.Second, 20*time.Millisecond)
 
-		pending, _ := store.ListTasks(string(scheduler.StatusPending))
+		pending, _, _ := store.ListTasks(string(scheduler.StatusPending), "", 0)
 		next := pending[0]
 		assert.NotEqual(t, "rec1", next.ID, "recurrence is a new task, not a mutation")
 		assert.Equal(t, "1h", next.Schedule, "the chain carries the schedule forward")
@@ -231,7 +231,7 @@ func TestRecurringReschedule(t *testing.T) {
 			return got != nil && got.Status == scheduler.StatusSucceeded
 		}, 2*time.Second, 20*time.Millisecond)
 
-		all, _ := store.ListTasks("")
+		all, _, _ := store.ListTasks("", "", 0)
 		assert.Len(t, all, 1, "a one-shot leaves no successor")
 	})
 }

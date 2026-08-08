@@ -1,16 +1,17 @@
 ---
 title: "List tasks"
-description: "GET /tasks - list tasks, optionally filtered by lifecycle status."
+description: "GET /tasks - page through tasks, optionally filtered by lifecycle status."
 ---
 
 ```
 GET /tasks
 ```
 
-Returns a JSON array of tasks. The optional `status` query parameter filters by [lifecycle state](/concepts/status).
+Returns one page of tasks.
+The optional `status` query parameter filters by [lifecycle state](/concepts/status).
 
 ```bash
-# All tasks
+# First page of all tasks
 curl http://localhost:8080/tasks -H "X-API-Key: your-secret"
 
 # Only failures
@@ -18,3 +19,55 @@ curl "http://localhost:8080/tasks?status=failed" -H "X-API-Key: your-secret"
 ```
 
 Valid `status` values: `pending`, `running`, `succeeded`, `failed`, `cancelled`.
+Anything else is a `400`.
+
+## Response
+
+```json
+{
+  "tasks": [
+    { "id": "d290f1ee-6c54-4b01-90e6-d701748f0851", "status": "pending", "...": "..." }
+  ],
+  "next_cursor": "dGFzazpwZW5kaW5nOjAwMDAwMDAxODkzNDgzMjAwOmQyOTBmMWVl",
+  "has_more": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `tasks` | The tasks in this page, oldest scheduled first. Always an array, never `null`. |
+| `next_cursor` | Pass back as `cursor` to fetch the next page. Absent on the last page. |
+| `has_more` | Whether a further page exists. |
+
+## Paging
+
+Pass `next_cursor` back as `cursor` and repeat while `has_more` is true.
+
+```bash
+curl "http://localhost:8080/tasks?limit=100" -H "X-API-Key: your-secret"
+curl "http://localhost:8080/tasks?limit=100&cursor=dGFzazpwZW5kaW5nOjAwMDAw..." -H "X-API-Key: your-secret"
+```
+
+`limit` defaults to `100` and caps at `1000`; anything outside `1..1000` is a `400`.
+A task carries its full attempt history, so a large page can be a large response body.
+
+<Warning>
+  The cursor is opaque. Don't construct, parse, or store it long-term - it encodes Schedy's internal key layout, which is not part of the API contract.
+  A cursor is only valid for the same `status` filter that produced it; mixing them returns a `400`.
+</Warning>
+
+Paging is keyset-based, not offset-based.
+Tasks created or deleted between pages will not shift rows across a page boundary, and a cursor stays valid even if the task it points at is deleted mid-walk.
+Tasks that reach a terminal state between pages move to a different status partition, so a walk of `?status=pending` can miss one that just fired - page `?status=succeeded` and `?status=failed` for the outcome.
+
+## Example: page through everything
+
+```bash
+cursor=""
+while :; do
+  page=$(curl -s "http://localhost:8080/tasks?limit=500&cursor=$cursor" -H "X-API-Key: your-secret")
+  echo "$page" | jq -r '.tasks[].id'
+  [ "$(echo "$page" | jq -r '.has_more')" = "true" ] || break
+  cursor=$(echo "$page" | jq -r '.next_cursor')
+done
+```

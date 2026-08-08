@@ -1,7 +1,9 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -208,35 +210,91 @@ func (s *BadgerStore) GetDueTasks(start, end time.Time) ([]Task, error) {
 	return tasks, err
 }
 
-// ListTasks returns tasks, optionally filtered by status ("" = all).
-func (s *BadgerStore) ListTasks(status string) ([]Task, error) {
-	var tasks []Task
+// ListTasks returns one page of tasks, optionally filtered by status ("" = all).
+//
+// Pagination is keyset, not offset: the cursor is the last key of the previous
+// page, so a page is a bounded Seek + scan rather than a full-store read, and
+// inserts or deletions between pages can't shift rows across a page boundary.
+// Keys are already ordered (status partition, then zero-padded ExecuteAt, then
+// id), so no secondary index is needed.
+//
+// A cursor whose key has since been deleted is still valid: Seek lands on the
+// next key in order and the page continues from there.
+func (s *BadgerStore) ListTasks(status, cursor string, limit int) ([]Task, string, error) {
+	if limit <= 0 {
+		limit = DefaultPageSize
+	}
+	if limit > MaxPageSize {
+		limit = MaxPageSize
+	}
 
 	prefix := []byte(keyPrefix)
 	if status != "" {
 		prefix = []byte(statusPrefix(TaskStatus(status)))
 	}
 
+	start := prefix
+	if cursor != "" {
+		k, err := decodeCursor(cursor)
+		// Rejecting a cursor from another partition keeps ?status= and ?cursor=
+		// from silently disagreeing: mismatched pairs 400 instead of paging
+		// through the wrong keyspace or returning a bogus empty page.
+		if err != nil || !bytes.HasPrefix(k, prefix) {
+			return nil, "", ErrInvalidCursor
+		}
+		start = k
+	}
+
+	var (
+		tasks   []Task
+		lastKey []byte
+		next    string
+	)
+
 	err := s.db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
 
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			err := it.Item().Value(func(val []byte) error {
-				var t Task
-				if err := json.Unmarshal(val, &t); err == nil {
-					tasks = append(tasks, t)
-				}
-				return nil
-			})
-			if err != nil {
-				return err
+		for it.Seek(start); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			key := item.KeyCopy(nil)
+
+			// The cursor names the last row already returned; exclude it.
+			if cursor != "" && bytes.Equal(key, start) {
+				continue
 			}
+			// One more row exists beyond this page, so hand back a cursor.
+			if len(tasks) == limit {
+				next = encodeCursor(lastKey)
+				return nil
+			}
+
+			var t Task
+			if err := item.Value(func(val []byte) error {
+				return json.Unmarshal(val, &t)
+			}); err != nil {
+				continue // skip an unreadable record rather than failing the page
+			}
+			tasks = append(tasks, t)
+			lastKey = key
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, "", err
+	}
 
-	return tasks, err
+	return tasks, next, nil
+}
+
+// encodeCursor makes a storage key opaque to clients so the key layout stays an
+// implementation detail.
+func encodeCursor(key []byte) string {
+	return base64.RawURLEncoding.EncodeToString(key)
+}
+
+func decodeCursor(cursor string) ([]byte, error) {
+	return base64.RawURLEncoding.DecodeString(cursor)
 }
 
 // GetTask retrieves a single task by id. Returns nil if it doesn't exist.
