@@ -27,6 +27,21 @@ type attempt struct {
 	strategy attemptStrategy
 	lastTime time.Time
 	count    int // number of attempted retries
+	// hint is the server-requested wait (Retry-After) for the next retry only.
+	// It acts as a floor under the computed delay: backing off harder than the
+	// strategy would is respectful, backing off less would hammer a server
+	// that just said "not yet". Consumed (reset) by next().
+	hint time.Duration
+}
+
+// serverHint records the wait the server asked for before the next retry.
+// Capped at maxBackoff so a hostile or misconfigured endpoint can't park a
+// worker slot for hours.
+func (a *attempt) serverHint(d time.Duration) {
+	if d > maxBackoff {
+		d = maxBackoff
+	}
+	a.hint = d
 }
 
 func newAttempt(rcount, interval int, mode scheduler.RetryMode) *attempt {
@@ -50,6 +65,7 @@ func (a *attempt) next() bool {
 		}
 		a.lastTime = timeFunc()
 		a.count++
+		a.hint = 0
 		return true
 	}
 	return false
@@ -60,14 +76,20 @@ func (a *attempt) next() bool {
 // min(base * 2^count, cap) - a uniform point in [0, that], which spreads
 // retries from many clients instead of synchronising them.
 func (a *attempt) delay() time.Duration {
-	if a.strategy.mode != scheduler.RetryExponential {
-		return a.strategy.interval
+	d := a.strategy.interval
+	if a.strategy.mode == scheduler.RetryExponential {
+		backoff := a.strategy.interval << a.count
+		if backoff <= 0 || backoff > maxBackoff { // <=0 catches shift overflow
+			backoff = maxBackoff
+		}
+		d = time.Duration(rand.Int64N(int64(backoff) + 1))
 	}
-	backoff := a.strategy.interval << a.count
-	if backoff <= 0 || backoff > maxBackoff { // <=0 catches shift overflow
-		backoff = maxBackoff
+	// A Retry-After from the server floors the delay: never come back sooner
+	// than asked, even when jitter rolled a small wait.
+	if a.hint > d {
+		d = a.hint
 	}
-	return time.Duration(rand.Int64N(int64(backoff) + 1))
+	return d
 }
 
 func (a *attempt) shouldRetry() bool {

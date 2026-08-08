@@ -56,3 +56,38 @@ func TestExponentialFullJitterBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestServerHintFloorsDelay(t *testing.T) {
+	slept := captureSleeps(t)
+	a := newAttempt(2, 100, scheduler.RetryFixed)
+	a.next() // first retry: lastTime zero, no sleep recorded
+
+	a.serverHint(3 * time.Second)
+	a.next()
+	if got := (*slept)[len(*slept)-1]; got != 3*time.Second {
+		t.Fatalf("hinted delay = %v, want 3s", got)
+	}
+	if a.hint != 0 {
+		t.Fatalf("hint not consumed after next()")
+	}
+}
+
+func TestServerHintCappedAtMaxBackoff(t *testing.T) {
+	a := newAttempt(1, 100, scheduler.RetryFixed)
+	a.serverHint(2 * time.Hour)
+	if a.hint != maxBackoff {
+		t.Fatalf("hint = %v, want cap %v", a.hint, maxBackoff)
+	}
+}
+
+func TestServerHintBelowComputedDelayIgnored(t *testing.T) {
+	slept := captureSleeps(t)
+	a := newAttempt(2, 100, scheduler.RetryFixed)
+	a.next()
+
+	a.serverHint(10 * time.Millisecond) // below the 100ms interval: floor, not override
+	a.next()
+	if got := (*slept)[len(*slept)-1]; got != 100*time.Millisecond {
+		t.Fatalf("delay = %v, want 100ms", got)
+	}
+}

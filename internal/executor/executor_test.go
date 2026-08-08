@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
@@ -171,5 +172,32 @@ func TestExecuteMethodAndBody(t *testing.T) {
 			t.Errorf("method %q: hasBody=%v want %v", c.method, hasBody, c.wantBody)
 		}
 		srv.Close()
+	}
+}
+
+func TestRetryAfterHint(t *testing.T) {
+	mk := func(code int, h string) *http.Response {
+		res := &http.Response{StatusCode: code, Header: http.Header{}}
+		if h != "" {
+			res.Header.Set("Retry-After", h)
+		}
+		return res
+	}
+	if d := retryAfterHint(mk(429, "7")); d != 7*time.Second {
+		t.Fatalf("seconds form = %v, want 7s", d)
+	}
+	if d := retryAfterHint(mk(503, time.Now().Add(30*time.Second).UTC().Format(http.TimeFormat))); d <= 0 || d > 30*time.Second {
+		t.Fatalf("http-date form = %v, want (0,30s]", d)
+	}
+	for name, res := range map[string]*http.Response{
+		"absent":       mk(429, ""),
+		"garbage":      mk(429, "soon"),
+		"negative":     mk(429, "-5"),
+		"past date":    mk(503, time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat)),
+		"wrong status": mk(500, "7"),
+	} {
+		if d := retryAfterHint(res); d != 0 {
+			t.Fatalf("%s = %v, want 0", name, d)
+		}
 	}
 }

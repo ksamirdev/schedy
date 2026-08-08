@@ -125,6 +125,9 @@ func (r *Runner) runOnce(start, end time.Time) {
 					t.Status = scheduler.StatusSucceeded
 					break
 				}
+				if res.RetryAfter > 0 {
+					attempt.serverHint(res.RetryAfter)
+				}
 				if attempt.next() {
 					log.Printf("Retrying task: %s (attempt %d/%d)", t.ID, attempt.count, attempt.strategy.retries)
 					continue
