@@ -240,8 +240,8 @@ paths:
       summary: Bulk-delete tasks
       description: >-
         Delete tasks matching one or more filters. At least one of `url`,
-        `before`, or `after` must be supplied, otherwise the request is
-        rejected with `400`.
+        `status`, `before`, or `after` must be supplied, otherwise the request
+        is rejected with `400`.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -251,6 +251,18 @@ paths:
           description: Delete tasks whose target URL matches this value.
           schema:
             type: string
+        - name: status
+          in: query
+          required: false
+          description: Delete only tasks in this lifecycle status.
+          schema:
+            type: string
+            enum:
+              - pending
+              - running
+              - succeeded
+              - failed
+              - cancelled
         - name: before
           in: query
           required: false
