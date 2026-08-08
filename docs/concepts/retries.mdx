@@ -35,6 +35,13 @@ Each try is recorded as an [attempt](/concepts/status) in the task's log, with i
 
 Retries happen inline within a single run, so the backoff horizon is bounded by the process lifetime: if the process restarts mid-backoff, the task is re-queued from the start rather than resuming its remaining waits.
 
+## Retry-After
+
+When a delivery fails with `429 Too Many Requests` or `503 Service Unavailable` and the response carries a `Retry-After` header, Schedy honors it.
+The requested wait becomes a floor under the next retry's delay: the retry never fires sooner than the server asked, but a strategy that would wait longer anyway still does.
+Both header forms are accepted (`Retry-After: 120` and an HTTP-date), and the wait is capped at the 5 minute backoff ceiling so a misbehaving endpoint cannot park a delivery slot indefinitely.
+Other statuses ignore the header.
+
 ## Failure callback
 
 Set `SCHEDY_ON_FAILURE_URL` and a task that exhausts its retries POSTs a single, best-effort notification there before going quiet, so a permanent failure at 3am is not silent:

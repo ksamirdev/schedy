@@ -220,6 +220,9 @@ func (r *Runner) runOnce(start, end time.Time) {
 					t.Status = scheduler.StatusSucceeded
 					break
 				}
+				if res.RetryAfter > 0 {
+					attempt.serverHint(res.RetryAfter)
+				}
 				if attempt.next() {
 					slog.Warn("retrying task", "task_id", t.ID, "attempt", attempt.count, "retries", attempt.strategy.retries, "error", res.Err)
 					continue

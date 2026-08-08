@@ -31,6 +31,36 @@ type Result struct {
 	// captured only on non-2xx responses (empty on success/transport error).
 	ResponseBody          string
 	ResponseBodyTruncated bool // true if the body exceeded maxBodyCapture
+	// RetryAfter is the wait the server asked for via a Retry-After header on a
+	// 429 or 503 response, 0 when absent/unparseable. The runner treats it as a
+	// floor for the next retry delay (capped - see runner's maxBackoff).
+	RetryAfter time.Duration
+}
+
+// retryAfterHint extracts the Retry-After wait from a throttling response.
+// Only 429 and 503 are honored - those are the codes whose semantics are
+// "come back later"; on other statuses the header is noise. Both RFC 9110
+// forms are accepted: delay-seconds and an HTTP-date.
+func retryAfterHint(res *http.Response) time.Duration {
+	if res.StatusCode != http.StatusTooManyRequests && res.StatusCode != http.StatusServiceUnavailable {
+		return 0
+	}
+	h := res.Header.Get("Retry-After")
+	if h == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(h); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(h); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 type Executor struct {
@@ -171,6 +201,7 @@ func (e *Executor) Execute(task scheduler.Task) Result {
 			Duration:              dur,
 			ResponseBody:          string(buf),
 			ResponseBodyTruncated: truncated,
+			RetryAfter:            retryAfterHint(res),
 		}
 	}
 
