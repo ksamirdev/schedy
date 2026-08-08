@@ -56,4 +56,16 @@ Set `SCHEDY_ON_FAILURE_URL` and a task that exhausts its retries POSTs a single,
 }
 ```
 
-The callback is fire-and-forget: it is never retried, and a failing callback never triggers a callback about itself. It is global (one URL for the whole server) and failure-only - success does not call back.
+The callback is fire-and-forget: it is never retried, and a failing callback never triggers a callback about itself. It is failure-only - success does not call back.
+
+A task can override the server-wide URL with its own `on_failure_url` (an absolute http(s) URL):
+
+```json
+{
+  "url": "https://api.example.com/webhook",
+  "execute_at": "2030-01-01T09:00:00Z",
+  "on_failure_url": "https://hooks.example.com/schedy-failed"
+}
+```
+
+When set, the callback for that task goes only to `on_failure_url`; `SCHEDY_ON_FAILURE_URL` remains the fallback for tasks that don't set one.
