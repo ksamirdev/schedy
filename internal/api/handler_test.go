@@ -116,6 +116,17 @@ func (m *mockStore) ListTasks(status, cursor string, limit int) ([]scheduler.Tas
 	return tasks, next, nil
 }
 
+func (m *mockStore) Counts(now time.Time) (scheduler.Counts, error) {
+	counts := scheduler.Counts{ByStatus: map[scheduler.TaskStatus]int{}}
+	for _, task := range m.tasks {
+		counts.ByStatus[task.Status]++
+		if task.Status == scheduler.StatusPending && !task.ExecuteAt.After(now) {
+			counts.Overdue++
+		}
+	}
+	return counts, nil
+}
+
 func (m *mockStore) DeleteTasks(url string, before, after *time.Time) (int, error) {
 	count := 0
 	toDelete := []string{}
@@ -1166,6 +1177,10 @@ func (f *failingStore) Update(task scheduler.Task) error {
 	return nil
 }
 
+func (f *failingStore) Counts(now time.Time) (scheduler.Counts, error) {
+	return scheduler.Counts{}, errors.New("database connection failed")
+}
+
 func (f *failingStore) RecoverRunning() error {
 	return nil
 }
@@ -1236,5 +1251,51 @@ func TestReadyHandler(t *testing.T) {
 		handler.Ready(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
+	})
+}
+
+// The metrics endpoint must expose live store state, stay behind the API key,
+// and fail loudly rather than serving a half-truth when the store is unreadable.
+func TestMetricsHandler(t *testing.T) {
+	store := newMockStore()
+	handler := New(store)
+	handler.APIKey = "test-api-key"
+
+	now := time.Now()
+	require.NoError(t, store.Save(scheduler.Task{ID: "overdue", ExecuteAt: now.Add(-time.Minute)}))
+	require.NoError(t, store.Save(scheduler.Task{ID: "future", ExecuteAt: now.Add(time.Hour)}))
+
+	t.Run("exposes task gauges from the store", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.Header.Set("X-API-Key", "test-api-key")
+		w := httptest.NewRecorder()
+
+		handler.Metrics(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Header().Get("Content-Type"), "text/plain")
+
+		body := w.Body.String()
+		assert.Contains(t, body, `schedy_tasks{status="pending"} 2`)
+		assert.Contains(t, body, "schedy_tasks_overdue 1")
+		assert.Contains(t, body, "# TYPE schedy_task_lateness_seconds histogram")
+	})
+
+	t.Run("requires the API key", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		w := httptest.NewRecorder()
+
+		handler.WithAuth(handler.Metrics)(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("500s when the store cannot be read", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		w := httptest.NewRecorder()
+
+		New(&failingStore{}).Metrics(w, req)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 }

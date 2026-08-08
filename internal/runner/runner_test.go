@@ -97,6 +97,10 @@ func (f *fakeStore) ListTasks(status, cursor string, limit int) ([]scheduler.Tas
 
 func (f *fakeStore) RecoverRunning() error { return nil }
 
+func (f *fakeStore) Counts(now time.Time) (scheduler.Counts, error) {
+	return scheduler.Counts{}, nil
+}
+
 // hitRecorder is a target server that reports the path of every delivery.
 func hitRecorder(t *testing.T) (*httptest.Server, chan string) {
 	t.Helper()

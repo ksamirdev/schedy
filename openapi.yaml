@@ -416,6 +416,45 @@ paths:
           description: The service is ready to serve traffic.
         '503':
           description: The service is not ready; the datastore is unavailable.
+  /metrics:
+    get:
+      tags:
+        - System
+      operationId: getMetrics
+      summary: Prometheus metrics
+      description: >-
+        Operational metrics in the Prometheus text exposition format: task
+        counts per status, the overdue backlog, delivery outcomes, delivery
+        duration, and how late tasks fired. Unlike the health probes this
+        endpoint requires the API key when one is configured, since queue depth
+        and backlog are operational detail. Go runtime metrics are not exported.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Metrics in the Prometheus text exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP schedy_tasks Tasks currently in each lifecycle status.
+                # TYPE schedy_tasks gauge
+                schedy_tasks{status="pending"} 842
+                schedy_tasks{status="running"} 3
+                # HELP schedy_tasks_overdue Pending tasks whose execute_at has already passed.
+                # TYPE schedy_tasks_overdue gauge
+                schedy_tasks_overdue 117
+                # HELP schedy_deliveries_total Delivery requests fired at task targets, by outcome. Retries count individually.
+                # TYPE schedy_deliveries_total counter
+                schedy_deliveries_total{result="success"} 1423
+                schedy_deliveries_total{result="failure"} 17
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
 components:
   securitySchemes:
     ApiKeyAuth:

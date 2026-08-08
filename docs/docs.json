@@ -52,7 +52,8 @@
           {
             "group": "System",
             "pages": [
-              "api/health"
+              "api/health",
+              "api/metrics"
             ]
           }
         ]
