@@ -289,6 +289,32 @@ func TestCreateTaskHandler(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, post(scheduler.MaxTimeoutMs+1).Code)
 	})
 
+	t.Run("on_failure_url", func(t *testing.T) {
+		post := func(u string) *httptest.ResponseRecorder {
+			reqBody := map[string]any{
+				"url":            "http://example.com/failure-cb",
+				"execute_at":     time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+				"on_failure_url": u,
+			}
+			body, _ := json.Marshal(reqBody)
+			req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			handler.CreateTask(w, req)
+			return w
+		}
+
+		w := post("https://hooks.example.com/failed")
+		assert.Equal(t, http.StatusCreated, w.Code)
+		var resp scheduler.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "https://hooks.example.com/failed", resp.OnFailureURL)
+
+		assert.Equal(t, http.StatusBadRequest, post("not a url").Code)
+		assert.Equal(t, http.StatusBadRequest, post("ftp://example.com/x").Code)
+		assert.Equal(t, http.StatusBadRequest, post("/relative/path").Code)
+	})
+
 	t.Run("recurrence schedule", func(t *testing.T) {
 		post := func(schedule string) *httptest.ResponseRecorder {
 			// Distinct URL so the shared store's earlier tasks don't dedup this one.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -80,6 +81,7 @@ type taskRequest struct {
 	RetryMode     scheduler.RetryMode `json:"retry_mode"`     // fixed (default) or exponential
 	Schedule      string              `json:"schedule"`       // optional Go duration ("15m"); recurring re-enqueue
 	TimeoutMs     int                 `json:"timeout_ms"`     // per-attempt delivery timeout; 0 = server default
+	OnFailureURL  string              `json:"on_failure_url"` // per-task failure callback, overrides SCHEDY_ON_FAILURE_URL
 }
 
 // decodeTaskRequest reads and validates a task body, applying defaults for the
@@ -126,6 +128,15 @@ func decodeTaskRequest(w http.ResponseWriter, r *http.Request) (taskRequest, tim
 	if req.TimeoutMs < 0 || req.TimeoutMs > scheduler.MaxTimeoutMs {
 		http.Error(w, fmt.Sprintf("invalid timeout_ms (0-%d)", scheduler.MaxTimeoutMs), http.StatusBadRequest)
 		return req, time.Time{}, false
+	}
+	// The callback must be an absolute http(s) URL: a garbage value would only
+	// surface as a silently dropped callback long after the create succeeded.
+	if req.OnFailureURL != "" {
+		u, err := url.Parse(req.OnFailureURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			http.Error(w, "invalid on_failure_url (absolute http(s) URL required)", http.StatusBadRequest)
+			return req, time.Time{}, false
+		}
 	}
 	// Interval-only recurrence: a plain Go duration, never cron. ParseDuration
 	// rejects cron expressions and calendar syntax for free.
@@ -220,6 +231,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		RetryInterval:  *req.RetryInterval,
 		RetryMode:      req.RetryMode,
 		TimeoutMs:      req.TimeoutMs,
+		OnFailureURL:   req.OnFailureURL,
 		Schedule:       req.Schedule,
 		Status:         scheduler.StatusPending,
 	}
@@ -280,6 +292,7 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	task.RetryInterval = *req.RetryInterval
 	task.RetryMode = req.RetryMode
 	task.TimeoutMs = req.TimeoutMs
+	task.OnFailureURL = req.OnFailureURL
 	task.Schedule = req.Schedule
 
 	if err := h.Store.Update(*task); err != nil {

@@ -314,17 +314,21 @@ func (r *Runner) reschedule(t scheduler.Task, fireTime time.Time) {
 	}
 }
 
-// notifyFailure fires a single best-effort POST to SCHEDY_ON_FAILURE_URL when a
-// task exhausts its retries, so a permanent failure is not silent. Fire-and-
-// forget: the callback is never retried, and a failing callback never triggers
-// a callback about itself.
+// notifyFailure fires a single best-effort POST when a task exhausts its
+// retries, so a permanent failure is not silent. The task's own on_failure_url
+// wins; SCHEDY_ON_FAILURE_URL is the fallback. Fire-and-forget: the callback is
+// never retried, and a failing callback never triggers a callback about itself.
 func (r *Runner) notifyFailure(t scheduler.Task) {
-	if r.onFailureURL == "" || len(t.Attempts) == 0 {
+	url := t.OnFailureURL
+	if url == "" {
+		url = r.onFailureURL
+	}
+	if url == "" || len(t.Attempts) == 0 {
 		return
 	}
 	last := t.Attempts[len(t.Attempts)-1]
 	res := r.executor.Execute(scheduler.Task{
-		URL:    r.onFailureURL,
+		URL:    url,
 		Method: http.MethodPost,
 		Payload: map[string]any{
 			"id":          t.ID,

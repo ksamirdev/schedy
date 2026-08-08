@@ -680,6 +680,13 @@ components:
             Timeout for a single delivery attempt, in milliseconds. 0 (or
             absent) uses the server default of 10 seconds. Capped at 300000
             (5 minutes).
+        on_failure_url:
+          type: string
+          description: >-
+            Absolute http(s) URL that receives this task's best-effort failure
+            callback when retries are exhausted, overriding the server-wide
+            SCHEDY_ON_FAILURE_URL.
+          example: "https://hooks.example.com/schedy-failed"
         schedule:
           type: string
           description: >-
@@ -754,6 +761,11 @@ components:
           description: >-
             Timeout for a single delivery attempt, in milliseconds. Present
             only when set; 0 or absent means the server default of 10 seconds.
+        on_failure_url:
+          type: string
+          description: >-
+            Per-task failure callback URL, present only when set. Overrides the
+            server-wide SCHEDY_ON_FAILURE_URL.
         schedule:
           type: string
           description: >-

@@ -78,6 +78,9 @@ type Task struct {
 	// TimeoutMs bounds a single delivery attempt, in milliseconds. 0 means the
 	// server default (10s). Capped at MaxTimeoutMs.
 	TimeoutMs int `json:"timeout_ms,omitempty"`
+	// OnFailureURL, if set, receives the best-effort failure callback for this
+	// task instead of the global SCHEDY_ON_FAILURE_URL.
+	OnFailureURL string `json:"on_failure_url,omitempty"`
 	// Schedule, if set, makes the task recurring: after each fire a fresh
 	// one-shot task is enqueued at fire_time + Schedule. Parsed by stdlib
 	// time.ParseDuration ("15m", "2h"). Deliberately NOT cron - no calendar,

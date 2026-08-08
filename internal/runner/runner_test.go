@@ -153,6 +153,49 @@ func TestFailureCallback(t *testing.T) {
 		}
 	})
 
+	t.Run("per-task on_failure_url wins over the global hook", func(t *testing.T) {
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(target.Close)
+
+		taskHook := make(chan struct{}, 1)
+		perTask := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			taskHook <- struct{}{}
+		}))
+		t.Cleanup(perTask.Close)
+
+		globalHook := make(chan struct{}, 1)
+		global := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			globalHook <- struct{}{}
+		}))
+		t.Cleanup(global.Close)
+
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:           "f2",
+			URL:          target.URL,
+			OnFailureURL: perTask.URL,
+			ExecuteAt:    time.Now().Add(150 * time.Millisecond),
+			Status:       scheduler.StatusPending,
+		}))
+
+		r := New(store, executor.NewExecutor(), time.Second)
+		r.onFailureURL = global.URL
+		r.runOnce(time.Now(), time.Now().Add(time.Second))
+
+		select {
+		case <-taskHook:
+		case <-time.After(2 * time.Second):
+			t.Fatal("per-task callback did not fire")
+		}
+		select {
+		case <-globalHook:
+			t.Fatal("global callback fired despite per-task override")
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
+
 	t.Run("silent on success", func(t *testing.T) {
 		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 		t.Cleanup(target.Close)
