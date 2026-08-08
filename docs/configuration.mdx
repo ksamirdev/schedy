@@ -15,6 +15,8 @@ The port is set with the `--port` flag (default `8080`). Behavior is tuned with 
 | `SCHEDY_SIGNING_SECRET`        | _unset_ | If set, every outgoing request is signed with an `X-Schedy-Signature` HMAC so receivers can authenticate it. See [Delivery](/concepts/delivery#signed-requests). |
 | `SCHEDY_MAX_CONCURRENT_DELIVERIES` | `50` | How many deliveries may be in flight at once. Bounds the burst a backlog can aim at your endpoints. See [Catch-up](/concepts/catch-up). |
 | `SCHEDY_MAX_STALENESS`         | _unset_ | If set (Go duration, e.g. `1h`), a task that comes due more than this late is skipped instead of delivered. Unset means catch everything up. See [Catch-up](/concepts/catch-up). |
+| `SCHEDY_LOG_FORMAT`            | `text`  | Log output format: `text` (human-readable) or `json` (one object per line, for log shippers). |
+| `SCHEDY_LOG_LEVEL`             | `info`  | Minimum log level: `debug`, `info`, `warn`, or `error`. Unrecognized values fall back to `info`. |
 
 Example:
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/ksamirdev/schedy/internal/api"
 	"github.com/ksamirdev/schedy/internal/executor"
+	"github.com/ksamirdev/schedy/internal/logging"
 	"github.com/ksamirdev/schedy/internal/runner"
 	"github.com/ksamirdev/schedy/internal/scheduler"
 	"github.com/ksamirdev/schedy/internal/version"
@@ -29,6 +30,8 @@ func dataDir() string {
 }
 
 func main() {
+	logging.Setup()
+
 	// Offline subcommand: `schedy restore <backup-file>` loads a snapshot taken
 	// via GET /admin/backup into an empty data dir, then exits.
 	if len(os.Args) > 1 && os.Args[1] == "restore" {
@@ -49,19 +52,21 @@ func main() {
 	if v := os.Getenv("SCHEDY_HISTORY_TTL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			log.Fatalf("invalid SCHEDY_HISTORY_TTL: %v", err)
+			slog.Error("invalid SCHEDY_HISTORY_TTL", "error", err)
+			os.Exit(1)
 		}
 		historyTTL = d
 	}
 
 	store, err := scheduler.NewBadgerStore(dataDir(), historyTTL)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("open store", "error", err)
+		os.Exit(1)
 	}
 
 	// Re-queue any tasks left mid-run by a previous crash/restart (at-least-once).
 	if err := store.RecoverRunning(); err != nil {
-		log.Printf("recover running tasks: %v", err)
+		slog.Error("recover running tasks", "error", err)
 	}
 
 	exec := executor.NewExecutor()
@@ -88,7 +93,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", `attachment; filename="schedy-backup.badger"`)
 		if err := store.Backup(w); err != nil {
-			log.Printf("backup: %v", err)
+			slog.Error("backup", "error", err)
 		}
 	}))
 
@@ -110,24 +115,25 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("Listening on %s", addr)
+		slog.Info("listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+			slog.Error("serve", "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("Shutting down...")
+	slog.Info("shutting down")
 	// Bounded drain: a background context would wait forever on one hung
 	// connection, turning SIGINT into a process that never exits.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("shutdown: %v", err)
+		slog.Error("shutdown", "error", err)
 	}
 	cancel()
 	<-gcDone
 	if err := store.Close(); err != nil {
-		log.Printf("close store: %v", err)
+		slog.Error("close store", "error", err)
 	}
 }
 
@@ -135,10 +141,12 @@ func main() {
 // refuses a non-empty dir, so it can't half-overwrite a live store.
 func runRestore(args []string) {
 	if len(args) != 1 {
-		log.Fatal("usage: schedy restore <backup-file>")
+		slog.Error("usage: schedy restore <backup-file>")
+		os.Exit(1)
 	}
 	if err := scheduler.Restore(dataDir(), args[0]); err != nil {
-		log.Fatalf("restore: %v", err)
+		slog.Error("restore", "error", err)
+		os.Exit(1)
 	}
-	log.Printf("restore complete: %s -> %s/", args[0], dataDir())
+	slog.Info("restore complete", "from", args[0], "to", dataDir()+"/")
 }

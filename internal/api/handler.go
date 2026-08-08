@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -458,7 +458,7 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	if err := metrics.Write(w, metrics.Snapshot{ByStatus: byStatus, Overdue: counts.Overdue}); err != nil {
 		// Headers are already out; the scrape fails on a truncated body.
-		log.Printf("write metrics: %v", err)
+		slog.Error("write metrics", "error", err)
 	}
 }
 
