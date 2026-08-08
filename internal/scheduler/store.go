@@ -16,6 +16,12 @@ const (
 	MaxPageSize     = 1000
 )
 
+// MaxDueBatch bounds how many due Tasks one GetDueTasks call may return. After
+// an outage the pending partition can hold an arbitrarily large backlog, and
+// Tasks carry their full attempt history - reading all of it into one slice is
+// the same unbounded allocation that paging fixed for listing.
+const MaxDueBatch = 1000
+
 // Counts is a tally of the store's contents, cheap enough to compute per
 // metrics scrape.
 type Counts struct {
@@ -36,8 +42,11 @@ type Store interface {
 	Delete(id string) error
 	GetTask(id string) (*Task, error)
 	DeleteTasks(url string, before, after *time.Time) (int, error)
-	// GetDueTasks returns pending Tasks whose ExecuteAt falls in [start, end].
-	GetDueTasks(start, end time.Time) ([]Task, error)
+	// GetDueTasks returns at most limit pending Tasks whose ExecuteAt falls in
+	// [start, end], oldest first. limit is clamped to [1, MaxDueBatch],
+	// defaulting to MaxDueBatch when <= 0; a backlog larger than one batch is
+	// drained over successive calls rather than loaded at once.
+	GetDueTasks(start, end time.Time, limit int) ([]Task, error)
 	// ListTasks returns one page of Tasks, optionally filtered by status
 	// ("" = all), starting after cursor ("" = first page). limit is clamped to
 	// [1, MaxPageSize], defaulting to DefaultPageSize when <= 0. The second

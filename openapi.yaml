@@ -449,6 +449,9 @@ paths:
                 # TYPE schedy_deliveries_total counter
                 schedy_deliveries_total{result="success"} 1423
                 schedy_deliveries_total{result="failure"} 17
+                # HELP schedy_deliveries_inflight Deliveries currently executing. Compare against SCHEDY_MAX_CONCURRENT_DELIVERIES to spot saturation.
+                # TYPE schedy_deliveries_inflight gauge
+                schedy_deliveries_inflight 12
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

@@ -23,6 +23,8 @@ curl http://localhost:8080/metrics -H "X-API-Key: your-secret"
 | `schedy_tasks_overdue` | gauge | Pending tasks whose `execute_at` has already passed. |
 | `schedy_deliveries_total{result}` | counter | Delivery requests fired at task targets. Retries count individually. |
 | `schedy_tasks_finished_total{status}` | counter | Tasks that reached a terminal delivery outcome, counted once each. |
+| `schedy_tasks_skipped_total{reason}` | counter | Tasks retired without delivery for exceeding [`SCHEDY_MAX_STALENESS`](/concepts/catch-up#staleness). |
+| `schedy_deliveries_inflight` | gauge | Deliveries currently executing. Compare against `SCHEDY_MAX_CONCURRENT_DELIVERIES` to spot saturation. |
 | `schedy_delivery_duration_seconds` | histogram | Round-trip time of delivery requests. |
 | `schedy_task_lateness_seconds` | histogram | Delay between a task's `execute_at` and the moment it fired. |
 
@@ -79,7 +81,13 @@ rate(schedy_deliveries_total{result="failure"}[5m])
 
 # p99 lateness
 histogram_quantile(0.99, rate(schedy_task_lateness_seconds_bucket[5m]))
+
+# Saturated: every delivery slot busy
+schedy_deliveries_inflight >= 50
 ```
+
+Time spent queued behind the concurrency cap counts as lateness, so saturation shows up in `schedy_task_lateness_seconds` rather than hiding behind it.
+See [Catch-up](/concepts/catch-up).
 
 <Warning>
   The `schedy_tasks` gauges scan the key index on every scrape.

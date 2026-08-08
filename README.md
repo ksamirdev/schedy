@@ -30,7 +30,7 @@ At `execute_at`, Schedy POSTs your payload to the URL, retries on failure, and k
 - Tracks each task's status and logs every delivery attempt.
 - Repeats on an interval if you want it to - `"schedule": "15m"`.
 
-Also there when you need it: HMAC request signing, idempotency keys, online backup/restore, an SSRF egress guard, and Prometheus metrics at `/metrics`.
+Also there when you need it: HMAC request signing, idempotency keys, online backup/restore, an SSRF egress guard, Prometheus metrics at `/metrics`, and backlog controls so a restart after downtime doesn't fire a month of tasks at your API at once.
 Full reference lives at **[schedy.mintlify.site](https://schedy.mintlify.site)**.
 The whole HTTP API is also described by a machine-readable [OpenAPI spec](openapi.yaml) - point your codegen, Postman, or Insomnia at it instead of hand-writing a client.
 

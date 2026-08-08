@@ -121,3 +121,18 @@ func TestConcurrentObserve(t *testing.T) {
 	assert.Equal(t, "100", out[`schedy_deliveries_total{result="success"}`])
 	assert.Equal(t, "100", out["schedy_task_lateness_seconds_count"])
 }
+
+func TestSkippedAndInflight(t *testing.T) {
+	Reset()
+	t.Cleanup(Reset)
+
+	ObserveSkipped()
+	ObserveSkipped()
+	InflightAdd(3)
+	InflightAdd(-1)
+
+	out := render(t, Snapshot{})
+
+	assert.Equal(t, "2", out[`schedy_tasks_skipped_total{reason="stale"}`])
+	assert.Equal(t, "2", out["schedy_deliveries_inflight"], "the gauge tracks deltas both ways")
+}

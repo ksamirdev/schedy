@@ -31,6 +31,14 @@ var (
 	tasksFailed    atomic.Uint64
 )
 
+// tasksSkipped counts tasks retired without delivery for exceeding the staleness
+// limit - the visible cost of an outage, separate from delivery failures.
+var tasksSkipped atomic.Uint64
+
+// inflight is the number of deliveries currently executing. Read against the
+// configured concurrency limit, it says whether the runner is saturated.
+var inflight atomic.Int64
+
 // deliveryDuration is the round-trip time of a delivery request.
 var deliveryDuration = newHistogram([]float64{
 	0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
@@ -61,6 +69,16 @@ func ObserveTaskFinished(ok bool) {
 	} else {
 		tasksFailed.Add(1)
 	}
+}
+
+// ObserveSkipped records a task retired without delivery for being too stale.
+func ObserveSkipped() {
+	tasksSkipped.Add(1)
+}
+
+// InflightAdd moves the in-flight delivery gauge by delta.
+func InflightAdd(delta int64) {
+	inflight.Add(delta)
 }
 
 // ObserveLateness records how late a task fired relative to its scheduled time.
@@ -109,6 +127,12 @@ func Write(w io.Writer, s Snapshot) error {
 	b.line("schedy_tasks_finished_total", `status="succeeded"`, float64(tasksSucceeded.Load()))
 	b.line("schedy_tasks_finished_total", `status="failed"`, float64(tasksFailed.Load()))
 
+	b.header("schedy_tasks_skipped_total", "counter", "Tasks retired without delivery for exceeding SCHEDY_MAX_STALENESS.")
+	b.line("schedy_tasks_skipped_total", `reason="stale"`, float64(tasksSkipped.Load()))
+
+	b.header("schedy_deliveries_inflight", "gauge", "Deliveries currently executing. Compare against SCHEDY_MAX_CONCURRENT_DELIVERIES to spot saturation.")
+	b.line("schedy_deliveries_inflight", "", float64(inflight.Load()))
+
 	b.histogram("schedy_delivery_duration_seconds", "Round-trip time of delivery requests.", deliveryDuration)
 	b.histogram("schedy_task_lateness_seconds", "Delay between a task's execute_at and the moment it fired.", lateness)
 
@@ -121,6 +145,8 @@ func Reset() {
 	deliveriesFail.Store(0)
 	tasksSucceeded.Store(0)
 	tasksFailed.Store(0)
+	tasksSkipped.Store(0)
+	inflight.Store(0)
 	deliveryDuration.reset()
 	lateness.reset()
 }

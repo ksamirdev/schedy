@@ -2,6 +2,7 @@ package runner
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -71,7 +72,7 @@ func (f *fakeStore) DeleteTasks(url string, before, after *time.Time) (int, erro
 	return 0, nil
 }
 
-func (f *fakeStore) GetDueTasks(start, end time.Time) ([]scheduler.Task, error) {
+func (f *fakeStore) GetDueTasks(start, end time.Time, limit int) ([]scheduler.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var tasks []scheduler.Task
@@ -137,7 +138,8 @@ func TestFailureCallback(t *testing.T) {
 			Status:    scheduler.StatusPending,
 		}))
 
-		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second, onFailureURL: hook.URL}
+		r := New(store, executor.NewExecutor(), time.Second)
+		r.onFailureURL = hook.URL
 		r.runOnce(time.Now(), time.Now().Add(time.Second))
 
 		select {
@@ -169,7 +171,8 @@ func TestFailureCallback(t *testing.T) {
 			Status:    scheduler.StatusPending,
 		}))
 
-		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second, onFailureURL: hook.URL}
+		r := New(store, executor.NewExecutor(), time.Second)
+		r.onFailureURL = hook.URL
 		r.runOnce(time.Now(), time.Now().Add(time.Second))
 
 		select {
@@ -197,7 +200,7 @@ func TestRecurringReschedule(t *testing.T) {
 			Schedule:  "1h", // far enough out that the successor won't fire mid-test
 		}))
 
-		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second}
+		r := New(store, executor.NewExecutor(), time.Second)
 		r.runOnce(time.Now(), time.Now().Add(time.Second))
 		<-hits // original delivered
 
@@ -226,7 +229,7 @@ func TestRecurringReschedule(t *testing.T) {
 			Status:    scheduler.StatusPending,
 		}))
 
-		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second}
+		r := New(store, executor.NewExecutor(), time.Second)
 		r.runOnce(time.Now(), time.Now().Add(time.Second))
 		<-hits
 
@@ -256,7 +259,7 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 		}
 		require.NoError(t, store.Save(task))
 
-		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second}
+		r := New(store, executor.NewExecutor(), time.Second)
 		r.runOnce(time.Now(), time.Now().Add(time.Second))
 
 		// Push the task an hour out while the runner still holds the stale copy.
@@ -288,7 +291,7 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 		}
 		require.NoError(t, store.Save(task))
 
-		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second}
+		r := New(store, executor.NewExecutor(), time.Second)
 		r.runOnce(time.Now(), time.Now().Add(time.Second))
 
 		// Same execute_at, different target.
@@ -330,7 +333,7 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 		}
 		require.NoError(t, store.Save(task))
 
-		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second}
+		r := New(store, executor.NewExecutor(), time.Second)
 		r.runOnce(time.Now(), time.Now().Add(time.Second))
 
 		// Arm retries that the stale copy does not have.
@@ -359,7 +362,7 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 		}
 		require.NoError(t, store.Save(task))
 
-		r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second}
+		r := New(store, executor.NewExecutor(), time.Second)
 		r.runOnce(time.Now(), time.Now().Add(time.Second))
 
 		cancelled := task
@@ -371,5 +374,230 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 			t.Fatalf("fired %s despite the cancel", path)
 		case <-time.After(600 * time.Millisecond):
 		}
+	})
+}
+
+// A backlog must not become a thundering herd. Whatever the outage left behind,
+// the runner may only hold maxConcurrent deliveries open at once.
+func TestConcurrencyIsBounded(t *testing.T) {
+	const limit = 3
+
+	var (
+		mu      sync.Mutex
+		active  int
+		peak    int
+		release = make(chan struct{})
+	)
+	// Unblock the handlers however the test ends: a failed assertion would
+	// otherwise leave every delivery goroutine parked and hang the package.
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseAll)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		active++
+		if active > peak {
+			peak = active
+		}
+		mu.Unlock()
+
+		<-release // hold the slot until the test lets go
+
+		mu.Lock()
+		active--
+		mu.Unlock()
+	}))
+	t.Cleanup(target.Close)
+
+	store := newFakeStore()
+	for i := 0; i < limit*4; i++ {
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        fmt.Sprintf("burst%02d", i),
+			URL:       target.URL,
+			ExecuteAt: time.Now().Add(-time.Minute), // all overdue, all fire at once
+			Status:    scheduler.StatusPending,
+		}))
+	}
+
+	r := New(store, executor.NewExecutor(), time.Second)
+	r.sem = make(chan struct{}, limit)
+	r.runOnce(time.Now(), time.Now().Add(time.Second))
+
+	// Let the first wave saturate. Give the excess goroutines time to pile in
+	// too, so an unbounded runner is caught rather than merely slow.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return active >= limit
+	}, 2*time.Second, 10*time.Millisecond, "deliveries never reached the cap")
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	assert.Equal(t, limit, peak, "concurrency exceeded the cap")
+	mu.Unlock()
+
+	releaseAll()
+	require.Eventually(t, func() bool {
+		all, _, _ := store.ListTasks(string(scheduler.StatusSucceeded), "", 0)
+		return len(all) == limit*4
+	}, 5*time.Second, 20*time.Millisecond, "backlog did not drain")
+
+	mu.Lock()
+	assert.LessOrEqual(t, peak, limit, "concurrency exceeded the cap while draining")
+	mu.Unlock()
+}
+
+// A task waits in the store as pending until it actually fires, so a task still
+// queued behind the concurrency cap is visible to the next tick. It must not be
+// delivered twice.
+func TestNoDoubleDeliveryAcrossTicks(t *testing.T) {
+	var hits atomic.Int32
+	release := make(chan struct{})
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseAll) // never leave a delivery parked on a failed assertion
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		<-release
+	}))
+	t.Cleanup(target.Close)
+
+	store := newFakeStore()
+	require.NoError(t, store.Save(scheduler.Task{
+		ID:        "slow",
+		URL:       target.URL,
+		ExecuteAt: time.Now().Add(-time.Minute),
+		Status:    scheduler.StatusPending,
+	}))
+
+	r := New(store, executor.NewExecutor(), time.Second)
+	r.runOnce(time.Now(), time.Now().Add(time.Second))
+	require.Eventually(t, func() bool { return hits.Load() == 1 }, 2*time.Second, 10*time.Millisecond)
+
+	// Second tick while the first delivery is still in flight.
+	r.runOnce(time.Now(), time.Now().Add(time.Second))
+	time.Sleep(200 * time.Millisecond)
+	assert.EqualValues(t, 1, hits.Load(), "an in-flight task was picked up twice")
+
+	releaseAll()
+}
+
+// With SCHEDY_MAX_STALENESS set, a task that came due long ago is retired rather
+// than delivered - and the retirement is never silent.
+func TestMaxStaleness(t *testing.T) {
+	t.Run("a stale task is skipped, not delivered", func(t *testing.T) {
+		var hits atomic.Int32
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+		}))
+		t.Cleanup(target.Close)
+
+		got := make(chan map[string]any, 1)
+		hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var b map[string]any
+			json.NewDecoder(r.Body).Decode(&b)
+			got <- b
+		}))
+		t.Cleanup(hook.Close)
+
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "ancient",
+			URL:       target.URL,
+			ExecuteAt: time.Now().Add(-6 * time.Hour),
+			Status:    scheduler.StatusPending,
+		}))
+
+		r := New(store, executor.NewExecutor(), time.Second)
+		r.maxStaleness = time.Hour
+		r.onFailureURL = hook.URL
+		r.runOnce(time.Now(), time.Now().Add(time.Second))
+
+		require.Eventually(t, func() bool {
+			task, _ := store.GetTask("ancient")
+			return task != nil && task.Status == scheduler.StatusFailed
+		}, 2*time.Second, 20*time.Millisecond, "stale task never reached a terminal state")
+
+		assert.EqualValues(t, 0, hits.Load(), "a skipped task must not be delivered")
+
+		task, _ := store.GetTask("ancient")
+		require.Len(t, task.Attempts, 1, "the skip must leave a trace in the attempt log")
+		assert.Contains(t, task.Attempts[0].Error, "exceeds max staleness")
+		assert.NotNil(t, task.FinishedAt)
+
+		select {
+		case b := <-got:
+			assert.Equal(t, "ancient", b["id"], "a skipped task must still fire the failure callback")
+		case <-time.After(2 * time.Second):
+			t.Fatal("skipping a task was silent")
+		}
+	})
+
+	t.Run("a task inside the window still fires", func(t *testing.T) {
+		srv, hits := hitRecorder(t)
+
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "recent",
+			URL:       srv.URL + "/ping",
+			ExecuteAt: time.Now().Add(-time.Minute),
+			Status:    scheduler.StatusPending,
+		}))
+
+		r := New(store, executor.NewExecutor(), time.Second)
+		r.maxStaleness = time.Hour
+		r.runOnce(time.Now(), time.Now().Add(time.Second))
+
+		select {
+		case <-hits:
+		case <-time.After(2 * time.Second):
+			t.Fatal("a task within the staleness window was not delivered")
+		}
+	})
+
+	t.Run("unset means catch everything up", func(t *testing.T) {
+		srv, hits := hitRecorder(t)
+
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "ancient2",
+			URL:       srv.URL + "/ping",
+			ExecuteAt: time.Now().Add(-30 * 24 * time.Hour),
+			Status:    scheduler.StatusPending,
+		}))
+
+		r := New(store, executor.NewExecutor(), time.Second) // maxStaleness unset
+		r.runOnce(time.Now(), time.Now().Add(time.Second))
+
+		select {
+		case <-hits:
+		case <-time.After(2 * time.Second):
+			t.Fatal("default behaviour must still fire an old task")
+		}
+	})
+
+	// An outage must interrupt a recurring chain, not end it.
+	t.Run("a skipped recurring task still re-enqueues", func(t *testing.T) {
+		store := newFakeStore()
+		require.NoError(t, store.Save(scheduler.Task{
+			ID:        "recur-stale",
+			URL:       "http://127.0.0.1:1/never",
+			ExecuteAt: time.Now().Add(-6 * time.Hour),
+			Status:    scheduler.StatusPending,
+			Schedule:  "1h",
+		}))
+
+		r := New(store, executor.NewExecutor(), time.Second)
+		r.maxStaleness = time.Minute
+		r.runOnce(time.Now(), time.Now().Add(time.Second))
+
+		require.Eventually(t, func() bool {
+			pending, _, _ := store.ListTasks(string(scheduler.StatusPending), "", 0)
+			return len(pending) == 1
+		}, 2*time.Second, 20*time.Millisecond, "the recurring chain died on a skip")
+
+		pending, _, _ := store.ListTasks(string(scheduler.StatusPending), "", 0)
+		assert.NotEqual(t, "recur-stale", pending[0].ID)
+		assert.True(t, pending[0].ExecuteAt.After(time.Now()), "the successor is anchored forward, not replayed")
 	})
 }

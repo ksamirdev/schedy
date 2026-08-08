@@ -2,9 +2,12 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +15,12 @@ import (
 	"github.com/ksamirdev/schedy/internal/metrics"
 	"github.com/ksamirdev/schedy/internal/scheduler"
 )
+
+// DefaultMaxConcurrent bounds how many deliveries may be in flight at once.
+// Without a bound, every task due in the same moment fires simultaneously -
+// after an outage that is thousands of concurrent requests aimed at the user's
+// own API, turning Schedy's recovery into their incident.
+const DefaultMaxConcurrent = 50
 
 type Runner struct {
 	ticker   Ticker
@@ -21,16 +30,68 @@ type Runner struct {
 	// onFailureURL, if set (SCHEDY_ON_FAILURE_URL), receives a best-effort POST
 	// whenever a task exhausts its retries and reaches the failed state.
 	onFailureURL string
+	// sem bounds concurrent deliveries (SCHEDY_MAX_CONCURRENT_DELIVERIES).
+	sem chan struct{}
+	// maxStaleness, if set (SCHEDY_MAX_STALENESS), is how far past its
+	// execute_at a task may fire. Zero means no limit: catch up everything.
+	maxStaleness time.Duration
+
+	// inflight holds the ids currently claimed by a delivery goroutine. A task
+	// stays pending in the store until it actually fires, so without this a
+	// tick could pick up a task that an earlier tick is already waiting to
+	// deliver - a real risk now that a task can sit on the semaphore for a
+	// while. Schedy is single-process, so an in-memory claim is enough.
+	mu       sync.Mutex
+	inflight map[string]struct{}
 }
 
 func New(store scheduler.Store, executor *executor.Executor, interval time.Duration) *Runner {
+	maxConcurrent := DefaultMaxConcurrent
+	if v := os.Getenv("SCHEDY_MAX_CONCURRENT_DELIVERIES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			log.Fatalf("invalid SCHEDY_MAX_CONCURRENT_DELIVERIES %q: want a positive integer", v)
+		}
+		maxConcurrent = n
+	}
+
+	var maxStaleness time.Duration
+	if v := os.Getenv("SCHEDY_MAX_STALENESS"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			log.Fatalf("invalid SCHEDY_MAX_STALENESS %q: want a positive Go duration like \"1h\"", v)
+		}
+		maxStaleness = d
+	}
+
 	return &Runner{
 		ticker:       NewTicker(interval),
 		store:        store,
 		executor:     executor,
 		interval:     interval,
 		onFailureURL: os.Getenv("SCHEDY_ON_FAILURE_URL"),
+		sem:          make(chan struct{}, maxConcurrent),
+		maxStaleness: maxStaleness,
+		inflight:     make(map[string]struct{}),
 	}
+}
+
+// claim reserves a task for delivery. It reports false if another goroutine
+// already holds it, in which case the caller must not touch the task.
+func (r *Runner) claim(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, held := r.inflight[id]; held {
+		return false
+	}
+	r.inflight[id] = struct{}{}
+	return true
+}
+
+func (r *Runner) release(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.inflight, id)
 }
 
 func (r *Runner) Start(ctx context.Context) {
@@ -46,14 +107,22 @@ func (r *Runner) Start(ctx context.Context) {
 }
 
 func (r *Runner) runOnce(start, end time.Time) {
-	tasks, err := r.store.GetDueTasks(start, end)
+	// One bounded batch per tick. A backlog larger than the batch is drained
+	// over successive ticks, oldest first, rather than read in at once.
+	tasks, err := r.store.GetDueTasks(start, end, scheduler.MaxDueBatch)
 	if err != nil {
 		log.Println("Failed to get due tasks:", err)
 		return
 	}
 
 	for i, task := range tasks {
+		// Already being delivered by an earlier tick: leave it alone.
+		if !r.claim(task.ID) {
+			continue
+		}
 		go func(t scheduler.Task, idx int) {
+			defer r.release(t.ID)
+
 			taskTime := time.Until(t.ExecuteAt)
 			if max(taskTime, 0) == 0 {
 				taskTime = 0
@@ -63,6 +132,18 @@ func (r *Runner) runOnce(start, end time.Time) {
 			defer timer.Stop()
 
 			<-timer.C()
+
+			// Wait for a delivery slot. Taken before the fire timestamp on
+			// purpose: time spent queued here is time the task is late, and
+			// hiding that would make saturation invisible in the one metric
+			// meant to show it.
+			r.sem <- struct{}{}
+			metrics.InflightAdd(1)
+			defer func() {
+				metrics.InflightAdd(-1)
+				<-r.sem
+			}()
+
 			fireTime := time.Now().UTC()
 
 			// The task may have been cancelled or updated after it was picked up
@@ -88,9 +169,18 @@ func (r *Runner) runOnce(start, end time.Time) {
 			}
 			t = *cur
 
+			// Too late to be worth firing: skip rather than deliver. Checked
+			// against the real fire time, so a task delayed by a queue of its
+			// peers is judged by when it would actually go out.
+			late := fireTime.Sub(t.ExecuteAt)
+			if r.maxStaleness > 0 && late > r.maxStaleness {
+				r.skipStale(t, late, fireTime)
+				return
+			}
+
 			// Recorded only once the task is committed to firing: a cancelled or
 			// rescheduled task never ran, so its wait is not delivery lateness.
-			metrics.ObserveLateness(fireTime.Sub(t.ExecuteAt))
+			metrics.ObserveLateness(late)
 
 			// Built from the re-read copy so an update to the retry settings
 			// takes effect on this run rather than the next one.
@@ -148,6 +238,36 @@ func (r *Runner) runOnce(start, end time.Time) {
 			r.reschedule(t, fireTime)
 		}(task, i)
 	}
+}
+
+// skipStale retires a task that came due too long ago to be worth delivering,
+// which after an outage is most of the backlog.
+//
+// It lands in failed rather than a status of its own: the reason is recorded as
+// an attempt, so the audit trail says what happened, and the failure callback
+// fires - a skipped task must never be silent, or the outage swallows work with
+// no trace. A recurring task still re-enqueues, so an outage interrupts the
+// chain rather than ending it.
+func (r *Runner) skipStale(t scheduler.Task, late time.Duration, fireTime time.Time) {
+	log.Printf("Task %s is %s past execute_at (max staleness %s), skipping", t.ID, late.Round(time.Second), r.maxStaleness)
+
+	t.Status = scheduler.StatusFailed
+	t.Attempts = append(t.Attempts, scheduler.Attempt{
+		N:       len(t.Attempts) + 1,
+		FiredAt: fireTime,
+		Error: fmt.Sprintf("skipped: %s past execute_at, exceeds max staleness %s",
+			late.Round(time.Second), r.maxStaleness),
+	})
+	t.FinishedAt = &fireTime
+
+	metrics.ObserveSkipped()
+	metrics.ObserveTaskFinished(false)
+
+	if err := r.store.Update(t); err != nil {
+		log.Printf("finalize skipped %s: %v", t.ID, err)
+	}
+	r.notifyFailure(t)
+	r.reschedule(t, fireTime)
 }
 
 // reschedule re-enqueues a recurring task (Schedule set) as a fresh one-shot at

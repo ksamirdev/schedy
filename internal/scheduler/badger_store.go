@@ -171,13 +171,21 @@ func (s *BadgerStore) Delete(id string) error {
 	})
 }
 
-// GetDueTasks returns pending tasks due at or before end.
+// GetDueTasks returns at most limit pending tasks due at or before end.
 //
 // The scan starts at the beginning of the pending partition, not at `start`, so
 // tasks that came due while the server was down - and tasks re-queued by
 // RecoverRunning, whose ExecuteAt is always in the past - are caught up rather
 // than skipped. `start` is retained for interface symmetry.
-func (s *BadgerStore) GetDueTasks(start, end time.Time) ([]Task, error) {
+//
+// The limit bounds the batch, not the catch-up: keys are ordered by ExecuteAt,
+// so a backlog is drained oldest-first over successive calls instead of being
+// read into memory in one go.
+func (s *BadgerStore) GetDueTasks(start, end time.Time, limit int) ([]Task, error) {
+	if limit <= 0 || limit > MaxDueBatch {
+		limit = MaxDueBatch
+	}
+
 	var tasks []Task
 
 	pfx := statusPrefix(StatusPending)
@@ -192,6 +200,9 @@ func (s *BadgerStore) GetDueTasks(start, end time.Time) ([]Task, error) {
 
 			// exit once past the due window (keys are zero-padded, ordered)
 			if string(key) > endKey {
+				break
+			}
+			if len(tasks) == limit {
 				break
 			}
 

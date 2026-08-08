@@ -30,6 +30,7 @@
               "concepts/status",
               "concepts/retries",
               "concepts/delivery",
+              "concepts/catch-up",
               "concepts/idempotency"
             ]
           }
