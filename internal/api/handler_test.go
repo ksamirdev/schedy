@@ -264,6 +264,33 @@ func TestCreateTaskHandler(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
+	t.Run("execute_in", func(t *testing.T) {
+		post := func(body map[string]any) *httptest.ResponseRecorder {
+			body["url"] = "http://example.com/relative"
+			b, _ := json.Marshal(body)
+			req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(b))
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			handler.CreateTask(w, req)
+			return w
+		}
+
+		before := time.Now().UTC()
+		w := post(map[string]any{"execute_in": "5m"})
+		require.Equal(t, http.StatusCreated, w.Code)
+		var resp scheduler.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.WithinRange(t, resp.ExecuteAt, before.Add(5*time.Minute), time.Now().UTC().Add(5*time.Minute))
+
+		assert.Equal(t, http.StatusBadRequest, post(map[string]any{
+			"execute_in": "5m",
+			"execute_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+		}).Code)
+		assert.Equal(t, http.StatusBadRequest, post(map[string]any{}).Code)
+		assert.Equal(t, http.StatusBadRequest, post(map[string]any{"execute_in": "-5m"}).Code)
+		assert.Equal(t, http.StatusBadRequest, post(map[string]any{"execute_in": "tomorrow"}).Code)
+	})
+
 	t.Run("timeout_ms", func(t *testing.T) {
 		post := func(timeoutMs any) *httptest.ResponseRecorder {
 			reqBody := map[string]any{

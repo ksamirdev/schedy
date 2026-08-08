@@ -75,7 +75,8 @@ type taskRequest struct {
 	Method        string              `json:"method"` // HTTP verb, defaults to POST
 	Headers       map[string]string   `json:"headers"`
 	Payload       any                 `json:"payload"`
-	ExecuteAt     string              `json:"execute_at"` // RFC3339
+	ExecuteAt     string              `json:"execute_at"` // RFC3339; exactly one of execute_at / execute_in
+	ExecuteIn     string              `json:"execute_in"` // positive Go duration ("5m") relative to now
 	Retries       int                 `json:"retries"`
 	RetryInterval *int                `json:"retry_interval"` // milliseconds
 	RetryMode     scheduler.RetryMode `json:"retry_mode"`     // fixed (default) or exponential
@@ -105,14 +106,35 @@ func decodeTaskRequest(w http.ResponseWriter, r *http.Request) (taskRequest, tim
 		http.Error(w, "invalid method", http.StatusBadRequest)
 		return req, time.Time{}, false
 	}
-	t, err := time.Parse(time.RFC3339, req.ExecuteAt)
-	if err != nil {
-		http.Error(w, "invalid time (ISO required)", http.StatusBadRequest)
+	// The fire time comes from exactly one of execute_at (absolute RFC3339) or
+	// execute_in (a positive Go duration relative to now). Both at once is
+	// ambiguous, so it's rejected rather than silently picking one.
+	var t time.Time
+	switch {
+	case req.ExecuteAt != "" && req.ExecuteIn != "":
+		http.Error(w, "provide execute_at or execute_in, not both", http.StatusBadRequest)
 		return req, time.Time{}, false
-	}
-	if !t.UTC().After(time.Now().UTC()) {
-		http.Error(w, "time must be in the future", http.StatusBadRequest)
+	case req.ExecuteAt == "" && req.ExecuteIn == "":
+		http.Error(w, "execute_at or execute_in is required", http.StatusBadRequest)
 		return req, time.Time{}, false
+	case req.ExecuteIn != "":
+		d, err := time.ParseDuration(req.ExecuteIn)
+		if err != nil || d <= 0 {
+			http.Error(w, `invalid execute_in (positive Go duration like "5m" required)`, http.StatusBadRequest)
+			return req, time.Time{}, false
+		}
+		t = time.Now().UTC().Add(d)
+	default:
+		var err error
+		t, err = time.Parse(time.RFC3339, req.ExecuteAt)
+		if err != nil {
+			http.Error(w, "invalid time (ISO required)", http.StatusBadRequest)
+			return req, time.Time{}, false
+		}
+		if !t.UTC().After(time.Now().UTC()) {
+			http.Error(w, "time must be in the future", http.StatusBadRequest)
+			return req, time.Time{}, false
+		}
 	}
 	if req.RetryInterval == nil {
 		req.RetryInterval = new(int)

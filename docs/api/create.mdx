@@ -13,7 +13,8 @@ Schedule an HTTP request for a future time.
 
 | Field            | Type   | Description                                                                                                                                       |
 | ---------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `execute_at`     | string | **Required.** When to run (RFC3339, UTC). Must be in the future.                                                                                 |
+| `execute_at`     | string | When to run (RFC3339, UTC). Must be in the future. Exactly one of `execute_at` or `execute_in` is required.                                       |
+| `execute_in`     | string | How long from now to run, as a positive Go duration (`"5m"`, `"2h"`). The server stores the resolved absolute time. Exactly one of `execute_at` or `execute_in` is required. |
 | `url`            | string | **Required.** Where to send the request.                                                                                                        |
 | `method`         | string | Optional HTTP verb: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` (default `POST`). `GET`/`HEAD` send no body.                                 |
 | `headers`        | object | Optional map of HTTP headers to send.                                                                                                           |

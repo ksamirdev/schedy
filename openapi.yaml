@@ -621,7 +621,6 @@ components:
         Server-owned state (id, status, attempts, finished_at) is not accepted.
       required:
         - url
-        - execute_at
       properties:
         url:
           type: string
@@ -632,8 +631,16 @@ components:
           format: date-time
           description: >-
             RFC3339 timestamp for when the task should fire. Must be in the
-            future at the time of the request.
+            future at the time of the request. Exactly one of `execute_at` or
+            `execute_in` must be provided.
           example: "2030-01-01T09:00:00Z"
+        execute_in:
+          type: string
+          description: >-
+            Positive Go duration (e.g. "5m", "2h") to fire relative to the time
+            of the request; the server stores the resolved absolute time.
+            Exactly one of `execute_at` or `execute_in` must be provided.
+          example: "5m"
         method:
           type: string
           enum:
