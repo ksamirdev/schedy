@@ -49,4 +49,7 @@ Set `SCHEDY_ON_FAILURE_URL` and a task that exhausts its retries POSTs a single,
 }
 ```
 
-The callback is fire-and-forget: it is never retried, and a failing callback never triggers a callback about itself. It is global (one URL for the whole server) and failure-only - success does not call back.
+The callback is fire-and-forget: it is never retried, and a failing callback never triggers a callback about itself. It is failure-only - success does not call back.
+
+A task can override the global URL with its own `on_failure_url` field, so different jobs can page different receivers.
+The per-task URL wins when both are set; the payload and semantics are identical.

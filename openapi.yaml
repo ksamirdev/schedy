@@ -601,6 +601,13 @@ components:
             fire_time + schedule. Must be positive. Interval-based only; cron
             expressions are not supported.
           example: "24h"
+        on_failure_url:
+          type: string
+          description: >-
+            Optional URL that receives this task's failure callback when
+            retries are exhausted, overriding the server-wide
+            SCHEDY_ON_FAILURE_URL. One best-effort POST, never retried.
+          example: https://ops.example.com/hooks/schedy-failed
     Task:
       type: object
       description: A scheduled task together with its current execution state.
@@ -666,6 +673,11 @@ components:
           type: string
           description: >-
             Go duration for recurrence, present only when the task is recurring.
+        on_failure_url:
+          type: string
+          description: >-
+            Per-task failure callback URL, present only when set. Overrides the
+            server-wide SCHEDY_ON_FAILURE_URL.
         status:
           type: string
           enum:

@@ -78,6 +78,7 @@ type taskRequest struct {
 	RetryInterval *int                `json:"retry_interval"` // milliseconds
 	RetryMode     scheduler.RetryMode `json:"retry_mode"`     // fixed (default) or exponential
 	Schedule      string              `json:"schedule"`       // optional Go duration ("15m"); recurring re-enqueue
+	OnFailureURL  string              `json:"on_failure_url"` // optional per-task failure callback, overrides SCHEDY_ON_FAILURE_URL
 }
 
 // decodeTaskRequest reads and validates a task body, applying defaults for the
@@ -214,6 +215,7 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		RetryInterval:  *req.RetryInterval,
 		RetryMode:      req.RetryMode,
 		Schedule:       req.Schedule,
+		OnFailureURL:   req.OnFailureURL,
 		Status:         scheduler.StatusPending,
 	}
 
@@ -273,6 +275,7 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	task.RetryInterval = *req.RetryInterval
 	task.RetryMode = req.RetryMode
 	task.Schedule = req.Schedule
+	task.OnFailureURL = req.OnFailureURL
 
 	if err := h.Store.Update(*task); err != nil {
 		http.Error(w, "could not update task", http.StatusInternalServerError)

@@ -373,3 +373,50 @@ func TestRunOnceRereadsTaskBeforeFiring(t *testing.T) {
 		}
 	})
 }
+
+// A task carrying its own on_failure_url gets its callback there, not at the
+// global SCHEDY_ON_FAILURE_URL.
+func TestFailureCallbackPerTaskURL(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(target.Close)
+
+	perTask := make(chan map[string]any, 4)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		perTask <- b
+	}))
+	t.Cleanup(hook.Close)
+
+	globalFired := make(chan struct{}, 1)
+	global := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		globalFired <- struct{}{}
+	}))
+	t.Cleanup(global.Close)
+
+	store := newFakeStore()
+	require.NoError(t, store.Save(scheduler.Task{
+		ID:           "p1",
+		URL:          target.URL,
+		ExecuteAt:    time.Now().Add(150 * time.Millisecond),
+		Status:       scheduler.StatusPending,
+		OnFailureURL: hook.URL,
+	}))
+
+	r := &Runner{store: store, executor: executor.NewExecutor(), interval: time.Second, onFailureURL: global.URL}
+	r.runOnce(time.Now(), time.Now().Add(time.Second))
+
+	select {
+	case b := <-perTask:
+		assert.Equal(t, "p1", b["id"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("per-task failure callback did not fire")
+	}
+	select {
+	case <-globalFired:
+		t.Fatal("global callback fired despite per-task override")
+	case <-time.After(300 * time.Millisecond):
+	}
+}

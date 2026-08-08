@@ -75,6 +75,10 @@ type Task struct {
 	// time.ParseDuration ("15m", "2h"). Deliberately NOT cron - no calendar,
 	// timezone, DST, or catch-up. Cancelling the pending task stops the chain.
 	Schedule string `json:"schedule,omitempty"`
+	// OnFailureURL, if set, receives this task's failure callback instead of
+	// the global SCHEDY_ON_FAILURE_URL. Same contract: one best-effort POST
+	// when retries are exhausted, never retried.
+	OnFailureURL string `json:"on_failure_url,omitempty"`
 
 	Status     TaskStatus `json:"status"`
 	Attempts   []Attempt  `json:"attempts,omitempty"`
