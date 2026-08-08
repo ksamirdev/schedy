@@ -1153,7 +1153,10 @@ func TestHealthHandler(t *testing.T) {
 		handler.Health(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Empty(t, w.Body.String())
+		var body map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		assert.Equal(t, "ok", body["status"])
+		assert.NotEmpty(t, body["version"])
 	})
 
 	t.Run("no auth required", func(t *testing.T) {

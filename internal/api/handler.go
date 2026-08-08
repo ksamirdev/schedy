@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ksamirdev/schedy/internal/metrics"
 	"github.com/ksamirdev/schedy/internal/scheduler"
+	"github.com/ksamirdev/schedy/internal/version"
 )
 
 const DEFAULT_RETRY_INTERVAL = 2000
@@ -463,7 +464,8 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 
 // Health is a liveness probe. Always returns 200 OK.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version.String()})
 }
 
 // Ready is a readiness probe. Returns 200 if database is accessible, 503

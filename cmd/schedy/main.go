@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/ksamirdev/schedy/internal/executor"
 	"github.com/ksamirdev/schedy/internal/runner"
 	"github.com/ksamirdev/schedy/internal/scheduler"
+	"github.com/ksamirdev/schedy/internal/version"
 )
 
 // dataDir is where BadgerDB persists tasks, from SCHEDY_DATA_DIR (default
@@ -35,7 +37,12 @@ func main() {
 	}
 
 	port := flag.String("port", "8080", "port to listen on")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("schedy", version.String())
+		return
+	}
 
 	// Terminal tasks are retained for history, then purged after this TTL.
 	historyTTL := 72 * time.Hour

@@ -79,7 +79,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
-        run: go build -ldflags "-s -w" -o schedy${{ matrix.ext }} ./cmd/schedy
+        run: go build -ldflags "-s -w -X github.com/ksamirdev/schedy/internal/version.Version=${{ github.ref_name }}" -o schedy${{ matrix.ext }} ./cmd/schedy
 
       - name: Create archive
         run: |
