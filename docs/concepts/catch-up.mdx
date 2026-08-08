@@ -54,6 +54,7 @@ A skipped task becomes `failed`, with the reason recorded as an attempt:
 ```
 
 It also fires the [failure callback](/concepts/retries#failure-callback) and counts in `schedy_tasks_skipped_total`.
+A skipped task you decide was worth doing after all can be [replayed](/api/replay).
 Skipping is never silent - an outage that quietly swallowed work would be worse than one that fired it late.
 
 <Note>

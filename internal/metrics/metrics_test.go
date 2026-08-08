@@ -128,11 +128,13 @@ func TestSkippedAndInflight(t *testing.T) {
 
 	ObserveSkipped()
 	ObserveSkipped()
+	ObserveReplay()
 	InflightAdd(3)
 	InflightAdd(-1)
 
 	out := render(t, Snapshot{})
 
 	assert.Equal(t, "2", out[`schedy_tasks_skipped_total{reason="stale"}`])
+	assert.Equal(t, "1", out["schedy_tasks_replayed_total"])
 	assert.Equal(t, "2", out["schedy_deliveries_inflight"], "the gauge tracks deltas both ways")
 }

@@ -1299,3 +1299,105 @@ func TestMetricsHandler(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 }
+
+// Replay is the recovery path: a task that failed against a broken endpoint,
+// or was skipped during an outage, must be re-armable without hand-rebuilding
+// it - and must never disturb a task the runner is already working on.
+func TestReplayTaskHandler(t *testing.T) {
+	store := newMockStore()
+	handler := New(store)
+	handler.APIKey = "test-api-key"
+
+	replay := func(t *testing.T, id string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/tasks/"+id+"/run", nil)
+		req.SetPathValue("id", id)
+		req.Header.Set("X-API-Key", "test-api-key")
+		w := httptest.NewRecorder()
+		handler.ReplayTask(w, req)
+		return w
+	}
+
+	// seed stores a task in an arbitrary status, bypassing Save's forced pending.
+	seed := func(t *testing.T, id string, status scheduler.TaskStatus, attempts []scheduler.Attempt) {
+		t.Helper()
+		finished := time.Now().Add(-time.Hour)
+		require.NoError(t, store.Update(scheduler.Task{
+			ID:         id,
+			URL:        "http://example.com/webhook",
+			Method:     http.MethodPost,
+			ExecuteAt:  time.Now().Add(-2 * time.Hour),
+			Status:     status,
+			Attempts:   attempts,
+			FinishedAt: &finished,
+		}))
+	}
+
+	t.Run("re-arms a failed task, keeping its history", func(t *testing.T) {
+		seed(t, "broke", scheduler.StatusFailed, []scheduler.Attempt{
+			{N: 1, StatusCode: 500, Error: "boom"},
+		})
+
+		w := replay(t, "broke")
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var got scheduler.Task
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		assert.Equal(t, "broke", got.ID, "replay keeps the id a caller already holds")
+		assert.Equal(t, scheduler.StatusPending, got.Status)
+		assert.Nil(t, got.FinishedAt)
+		assert.WithinDuration(t, time.Now(), got.ExecuteAt, 5*time.Second, "a replayed task is due now")
+		require.Len(t, got.Attempts, 1, "the failure that prompted the replay must survive it")
+		assert.Equal(t, "boom", got.Attempts[0].Error)
+
+		// Persisted, not just echoed.
+		stored, err := store.GetTask("broke")
+		require.NoError(t, err)
+		assert.Equal(t, scheduler.StatusPending, stored.Status)
+	})
+
+	t.Run("replays succeeded and cancelled tasks too", func(t *testing.T) {
+		for _, status := range []scheduler.TaskStatus{scheduler.StatusSucceeded, scheduler.StatusCancelled} {
+			t.Run(string(status), func(t *testing.T) {
+				id := "done-" + string(status)
+				seed(t, id, status, nil)
+
+				w := replay(t, id)
+				require.Equal(t, http.StatusOK, w.Code)
+
+				stored, err := store.GetTask(id)
+				require.NoError(t, err)
+				assert.Equal(t, scheduler.StatusPending, stored.Status)
+			})
+		}
+	})
+
+	t.Run("refuses a task the runner may already hold", func(t *testing.T) {
+		for _, status := range []scheduler.TaskStatus{scheduler.StatusPending, scheduler.StatusRunning} {
+			t.Run(string(status), func(t *testing.T) {
+				id := "live-" + string(status)
+				seed(t, id, status, nil)
+
+				w := replay(t, id)
+				assert.Equal(t, http.StatusConflict, w.Code, "re-arming a live task would race the runner")
+
+				stored, err := store.GetTask(id)
+				require.NoError(t, err)
+				assert.Equal(t, status, stored.Status, "a refused replay must not mutate the task")
+			})
+		}
+	})
+
+	t.Run("404s an unknown task", func(t *testing.T) {
+		assert.Equal(t, http.StatusNotFound, replay(t, "nope").Code)
+	})
+
+	t.Run("requires the API key", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/tasks/broke/run", nil)
+		w := httptest.NewRecorder()
+
+		handler.WithAuth(handler.ReplayTask)(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+}

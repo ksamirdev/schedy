@@ -601,3 +601,36 @@ func TestMaxStaleness(t *testing.T) {
 		assert.True(t, pending[0].ExecuteAt.After(time.Now()), "the successor is anchored forward, not replayed")
 	})
 }
+
+// A replayed task keeps its earlier attempts, so the numbering must continue
+// rather than restart - two attempts both called "n: 1" make the log unreadable
+// at exactly the moment someone is reading it.
+func TestAttemptNumberingContinuesAfterReplay(t *testing.T) {
+	srv, hits := hitRecorder(t)
+
+	store := newFakeStore()
+	require.NoError(t, store.Save(scheduler.Task{
+		ID:        "replayed",
+		URL:       srv.URL + "/ping",
+		ExecuteAt: time.Now().Add(-time.Minute),
+		Status:    scheduler.StatusPending,
+		// What a prior failed run left behind, as the replay endpoint preserves it.
+		Attempts: []scheduler.Attempt{
+			{N: 1, StatusCode: 500, Error: "boom"},
+			{N: 2, StatusCode: 500, Error: "boom"},
+		},
+	}))
+
+	r := New(store, executor.NewExecutor(), time.Second)
+	r.runOnce(time.Now(), time.Now().Add(time.Second))
+	<-hits
+
+	require.Eventually(t, func() bool {
+		got, _ := store.GetTask("replayed")
+		return got != nil && got.Status == scheduler.StatusSucceeded
+	}, 2*time.Second, 20*time.Millisecond)
+
+	got, _ := store.GetTask("replayed")
+	require.Len(t, got.Attempts, 3, "the replay appends rather than replacing")
+	assert.Equal(t, 3, got.Attempts[2].N, "numbering continues across the replay")
+}

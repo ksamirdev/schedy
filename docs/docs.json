@@ -46,6 +46,7 @@
               "api/list",
               "api/get",
               "api/update",
+              "api/replay",
               "api/cancel",
               "api/bulk-delete"
             ]
