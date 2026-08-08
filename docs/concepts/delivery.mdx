@@ -13,6 +13,13 @@ Attempts are retried, and on restart any task left mid-run is re-queued rather t
 
 Tasks that came due while the server was down are caught up on the next scan rather than skipped.
 
+## Request headers
+
+Every delivery identifies itself.
+The `User-Agent` is `schedy` unless the task's own `headers` set one.
+`X-Schedy-Task-Id` carries the task's id, so a receiver can correlate a request with `GET /tasks/{id}` - its attempt history and retries - without embedding the id in every payload.
+It is set after the task's custom headers, so a task cannot claim another task's id.
+
 ## Signed requests
 
 Set `SCHEDY_SIGNING_SECRET` and Schedy signs every outgoing request so your receiver can verify it genuinely came from Schedy, and not from anyone who happened to learn the URL.
