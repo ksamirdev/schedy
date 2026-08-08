@@ -85,12 +85,12 @@ func (f *fakeStore) GetDueTasks(start, end time.Time, limit int) ([]scheduler.Ta
 	return tasks, nil
 }
 
-func (f *fakeStore) ListTasks(status, cursor string, limit int) ([]scheduler.Task, string, error) {
+func (f *fakeStore) ListTasks(filter scheduler.ListFilter, cursor string, limit int) ([]scheduler.Task, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var tasks []scheduler.Task
 	for _, task := range f.tasks {
-		if status == "" || string(task.Status) == status {
+		if filter.Status == "" || string(task.Status) == filter.Status {
 			tasks = append(tasks, task)
 		}
 	}
@@ -250,11 +250,11 @@ func TestRecurringReschedule(t *testing.T) {
 
 		// The successor is a fresh, distinct, pending one-shot carrying the schedule.
 		require.Eventually(t, func() bool {
-			pending, _, _ := store.ListTasks(string(scheduler.StatusPending), "", 0)
+			pending, _, _ := store.ListTasks(scheduler.ListFilter{Status: string(scheduler.StatusPending)}, "", 0)
 			return len(pending) == 1
 		}, 2*time.Second, 20*time.Millisecond)
 
-		pending, _, _ := store.ListTasks(string(scheduler.StatusPending), "", 0)
+		pending, _, _ := store.ListTasks(scheduler.ListFilter{Status: string(scheduler.StatusPending)}, "", 0)
 		next := pending[0]
 		assert.NotEqual(t, "rec1", next.ID, "recurrence is a new task, not a mutation")
 		assert.Equal(t, "1h", next.Schedule, "the chain carries the schedule forward")
@@ -282,7 +282,7 @@ func TestRecurringReschedule(t *testing.T) {
 			return got != nil && got.Status == scheduler.StatusSucceeded
 		}, 2*time.Second, 20*time.Millisecond)
 
-		all, _, _ := store.ListTasks("", "", 0)
+		all, _, _ := store.ListTasks(scheduler.ListFilter{}, "", 0)
 		assert.Len(t, all, 1, "a one-shot leaves no successor")
 	})
 }
@@ -482,7 +482,7 @@ func TestConcurrencyIsBounded(t *testing.T) {
 
 	releaseAll()
 	require.Eventually(t, func() bool {
-		all, _, _ := store.ListTasks(string(scheduler.StatusSucceeded), "", 0)
+		all, _, _ := store.ListTasks(scheduler.ListFilter{Status: string(scheduler.StatusSucceeded)}, "", 0)
 		return len(all) == limit*4
 	}, 5*time.Second, 20*time.Millisecond, "backlog did not drain")
 
@@ -636,11 +636,11 @@ func TestMaxStaleness(t *testing.T) {
 		r.runOnce(context.Background(), time.Now(), time.Now().Add(time.Second))
 
 		require.Eventually(t, func() bool {
-			pending, _, _ := store.ListTasks(string(scheduler.StatusPending), "", 0)
+			pending, _, _ := store.ListTasks(scheduler.ListFilter{Status: string(scheduler.StatusPending)}, "", 0)
 			return len(pending) == 1
 		}, 2*time.Second, 20*time.Millisecond, "the recurring chain died on a skip")
 
-		pending, _, _ := store.ListTasks(string(scheduler.StatusPending), "", 0)
+		pending, _, _ := store.ListTasks(scheduler.ListFilter{Status: string(scheduler.StatusPending)}, "", 0)
 		assert.NotEqual(t, "recur-stale", pending[0].ID)
 		assert.True(t, pending[0].ExecuteAt.After(time.Now()), "the successor is anchored forward, not replayed")
 	})

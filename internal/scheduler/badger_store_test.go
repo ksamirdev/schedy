@@ -83,7 +83,7 @@ func TestBackupAndRestore(t *testing.T) {
 		require.NoError(t, err)
 		defer dst.db.Close()
 
-		all, _, err := dst.ListTasks("", "", 0)
+		all, _, err := dst.ListTasks(ListFilter{}, "", 0)
 		require.NoError(t, err)
 		assert.Len(t, all, 2)
 
@@ -183,11 +183,11 @@ func TestStatusLifecycle(t *testing.T) {
 	assert.Equal(t, StatusSucceeded, got.Status)
 	assert.Len(t, got.Attempts, 1)
 
-	succeeded, _, err := store.ListTasks(string(StatusSucceeded), "", 0)
+	succeeded, _, err := store.ListTasks(ListFilter{Status: string(StatusSucceeded)}, "", 0)
 	require.NoError(t, err)
 	assert.Len(t, succeeded, 1)
 
-	pending, _, err := store.ListTasks(string(StatusPending), "", 0)
+	pending, _, err := store.ListTasks(ListFilter{Status: string(StatusPending)}, "", 0)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 }
@@ -470,7 +470,7 @@ func TestListTasksPagination(t *testing.T) {
 		for pages := 0; ; pages++ {
 			require.Less(t, pages, total+2, "paging failed to terminate")
 
-			page, next, err := store.ListTasks("", cursor, limit)
+			page, next, err := store.ListTasks(ListFilter{}, cursor, limit)
 			require.NoError(t, err)
 			for _, task := range page {
 				ids = append(ids, task.ID)
@@ -498,22 +498,22 @@ func TestListTasksPagination(t *testing.T) {
 	}
 
 	t.Run("limit defaults and clamps", func(t *testing.T) {
-		page, _, err := store.ListTasks("", "", 0)
+		page, _, err := store.ListTasks(ListFilter{}, "", 0)
 		require.NoError(t, err)
 		assert.Len(t, page, total, "<=0 means the default page size, not zero rows")
 
-		page, _, err = store.ListTasks("", "", MaxPageSize+1)
+		page, _, err = store.ListTasks(ListFilter{}, "", MaxPageSize+1)
 		require.NoError(t, err)
 		assert.Len(t, page, total, "an over-large limit clamps rather than erroring")
 	})
 
 	t.Run("a cursor survives its own row being deleted", func(t *testing.T) {
-		first, next, err := store.ListTasks("", "", 5)
+		first, next, err := store.ListTasks(ListFilter{}, "", 5)
 		require.NoError(t, err)
 		require.NotEmpty(t, next)
 		require.NoError(t, store.Delete(first[len(first)-1].ID)) // the cursor row itself
 
-		page, _, err := store.ListTasks("", next, 5)
+		page, _, err := store.ListTasks(ListFilter{}, next, 5)
 		require.NoError(t, err)
 		require.NotEmpty(t, page)
 		assert.Equal(t, "t05", page[0].ID, "the page resumes after the deleted cursor")
@@ -522,17 +522,17 @@ func TestListTasksPagination(t *testing.T) {
 	})
 
 	t.Run("rejects a malformed cursor", func(t *testing.T) {
-		_, _, err := store.ListTasks("", "not-base64!!", 5)
+		_, _, err := store.ListTasks(ListFilter{}, "not-base64!!", 5)
 		assert.ErrorIs(t, err, ErrInvalidCursor)
 	})
 
 	t.Run("rejects a cursor from another status partition", func(t *testing.T) {
-		_, next, err := store.ListTasks(string(StatusPending), "", 5)
+		_, next, err := store.ListTasks(ListFilter{Status: string(StatusPending)}, "", 5)
 		require.NoError(t, err)
 		require.NotEmpty(t, next)
 
 		// Same cursor, different status: paging on would walk the wrong keyspace.
-		_, _, err = store.ListTasks(string(StatusSucceeded), next, 5)
+		_, _, err = store.ListTasks(ListFilter{Status: string(StatusSucceeded)}, next, 5)
 		assert.ErrorIs(t, err, ErrInvalidCursor)
 	})
 
@@ -542,7 +542,7 @@ func TestListTasksPagination(t *testing.T) {
 		done.Status = StatusSucceeded
 		require.NoError(t, store.Update(*done))
 
-		succeeded, next, err := store.ListTasks(string(StatusSucceeded), "", 1)
+		succeeded, next, err := store.ListTasks(ListFilter{Status: string(StatusSucceeded)}, "", 1)
 		require.NoError(t, err)
 		assert.Empty(t, next, "one row, one page")
 		require.Len(t, succeeded, 1)
@@ -636,4 +636,60 @@ func TestGetDueTasksBatchLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, next, 5)
 	assert.Equal(t, "due05", next[0].ID)
+}
+
+// A URL filter must return only matching rows, count the page limit against
+// matches (not scanned rows), and keep the cursor walk exhaustive.
+func TestListTasksURLFilter(t *testing.T) {
+	store, cleanup := setupBadgerDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	const total = 20
+	for i := 0; i < total; i++ {
+		url := "http://a.example.com"
+		if i%2 == 1 {
+			url = "http://b.example.com"
+		}
+		require.NoError(t, store.Save(Task{
+			ID:        fmt.Sprintf("u%02d", i),
+			URL:       url,
+			ExecuteAt: now.Add(time.Duration(i) * time.Minute),
+		}))
+	}
+
+	t.Run("returns only matching rows", func(t *testing.T) {
+		page, next, err := store.ListTasks(ListFilter{URL: "http://a.example.com"}, "", 0)
+		require.NoError(t, err)
+		assert.Empty(t, next)
+		assert.Len(t, page, total/2)
+		for _, task := range page {
+			assert.Equal(t, "http://a.example.com", task.URL)
+		}
+	})
+
+	t.Run("limit counts matches and cursor continues the walk", func(t *testing.T) {
+		var ids []string
+		cursor := ""
+		for {
+			page, next, err := store.ListTasks(ListFilter{URL: "http://b.example.com"}, cursor, 3)
+			require.NoError(t, err)
+			for _, task := range page {
+				assert.Equal(t, "http://b.example.com", task.URL)
+				ids = append(ids, task.ID)
+			}
+			if next == "" {
+				break
+			}
+			cursor = next
+		}
+		assert.Len(t, ids, total/2)
+	})
+
+	t.Run("no match is an empty page, not an error", func(t *testing.T) {
+		page, next, err := store.ListTasks(ListFilter{URL: "http://nope.example.com"}, "", 0)
+		require.NoError(t, err)
+		assert.Empty(t, page)
+		assert.Empty(t, next)
+	})
 }
